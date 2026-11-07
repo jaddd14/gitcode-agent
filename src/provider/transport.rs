@@ -6,10 +6,41 @@ use super::{
     retry::Policy,
     sse::Decoder,
 };
-use crate::credentials::Secret;
+use super::{openai_chat, openai_responses};
+use crate::{config::Protocol, credentials::Secret};
 use futures_util::StreamExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
+
+enum WireStream {
+    Anthropic(anthropic::Stream),
+    Chat(openai_chat::Stream),
+    Responses(openai_responses::Stream),
+}
+
+impl WireStream {
+    fn new(protocol: Protocol) -> Self {
+        match protocol {
+            Protocol::Anthropic => Self::Anthropic(anthropic::Stream::default()),
+            Protocol::OpenaiChat => Self::Chat(openai_chat::Stream::default()),
+            Protocol::OpenaiResponses => Self::Responses(openai_responses::Stream::default()),
+        }
+    }
+    fn accept(&mut self, record: super::sse::Record) -> Result<Vec<Event>, String> {
+        match self {
+            Self::Anthropic(s) => s.accept(record),
+            Self::Chat(s) => s.accept(record),
+            Self::Responses(s) => s.accept(record),
+        }
+    }
+    fn finish(&self) -> Result<(), String> {
+        match self {
+            Self::Anthropic(s) => s.finish(),
+            Self::Chat(s) => s.finish(),
+            Self::Responses(s) => s.finish(),
+        }
+    }
+}
 
 /// Cancellation-safe Messages client; dropping its request future closes the stream.
 pub struct Client {
@@ -19,6 +50,7 @@ pub struct Client {
     bearer: bool,
     timeout: Duration,
     retry: Policy,
+    protocol: Protocol,
 }
 
 impl Client {
@@ -28,6 +60,17 @@ impl Client {
         secret: Option<Secret>,
         bearer: bool,
         timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::with_protocol(base_url, secret, bearer, timeout, Protocol::Anthropic)
+    }
+
+    /// Construct a client for any supported protocol without network activity.
+    pub fn with_protocol(
+        base_url: &str,
+        secret: Option<Secret>,
+        bearer: bool,
+        timeout: Duration,
+        protocol: Protocol,
     ) -> Result<Self, String> {
         let url = reqwest::Url::parse(base_url).map_err(|_| "invalid provider URL")?;
         if !matches!(url.scheme(), "http" | "https")
@@ -42,11 +85,20 @@ impl Client {
             .map_err(|_| "cannot initialize HTTP client")?;
         Ok(Self {
             http,
-            endpoint: format!("{}/v1/messages", base_url.trim_end_matches('/')),
+            endpoint: format!(
+                "{}{}",
+                base_url.trim_end_matches('/'),
+                match protocol {
+                    Protocol::Anthropic => "/v1/messages",
+                    Protocol::OpenaiChat => "/chat/completions",
+                    Protocol::OpenaiResponses => "/responses",
+                }
+            ),
             secret,
             bearer,
             timeout,
             retry: Policy::default(),
+            protocol,
         })
     }
 
@@ -66,7 +118,11 @@ impl Client {
         request: &Request,
         progress: Option<&mpsc::Sender<Event>>,
     ) -> Result<Vec<Event>, String> {
-        let body = anthropic::encode(request)?;
+        let body = match self.protocol {
+            Protocol::Anthropic => anthropic::encode(request)?,
+            Protocol::OpenaiChat => openai_chat::encode(request)?,
+            Protocol::OpenaiResponses => openai_responses::encode(request)?,
+        };
         for attempt in 0..=self.retry.retries {
             let mut builder = self
                 .http
@@ -104,7 +160,7 @@ impl Client {
             }
             let mut bytes = response.bytes_stream();
             let mut decoder = Decoder::default();
-            let mut stream = anthropic::Stream::default();
+            let mut stream = WireStream::new(self.protocol);
             let mut events = Vec::new();
             while let Some(chunk) = bytes.next().await {
                 let chunk = chunk.map_err(|_| "provider stream disconnected")?;

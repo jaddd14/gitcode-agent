@@ -1,0 +1,15 @@
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"item_1","type":"function_call","call_id":"response_1","name":"Read","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"item_1","delta":"{\"path\":"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"item_1","delta":"\"src/main.rs\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"item_1","type":"function_call","call_id":"response_1","name":"Read","arguments":"{\"path\":\"src/main.rs\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":8,"input_tokens_details":{"cached_tokens":4}}}}
+

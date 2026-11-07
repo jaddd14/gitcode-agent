@@ -7,5 +7,6 @@
 - 2026-11-07: Test modules may use unwrap for direct assertions; production unwrap/expect remain warning-gated. Blocking foundation IO is synchronous by design; async integration must call it through spawn_blocking.
 - 2026-11-07: Development takes place on main with local milestone commits; no remote is configured before M17.
 - 2026-11-07: Never claim parity or mark incomplete milestones complete. Keep actual test evidence distinct from planned acceptance criteria.
+- 2026-11-07: M3 uses the same bounded HTTP transport for all protocols. Missing usage is flagged estimated; malformed arguments reject a turn rather than being executed. Repair and model feedback are pending agent-loop integration.
 - 2026-11-07: M2 adds Tokio for cancellation-safe async IO, reqwest with rustls/JSON/stream only for HTTPS without native TLS build dependencies, and futures-util for byte-stream iteration.
 - 2026-11-07: Transport buffers validated final events while emitting only non-executable progress immediately. Truncated streams never expose executable tool calls; connection-drop retries and full reasoning/signature replay are deferred hardening work and must remain visible gaps until verified.
