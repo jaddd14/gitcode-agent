@@ -1,0 +1,10 @@
+/target/
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+.gitcode/settings.local.json
+.gitcode/config.local.toml
+.env
+.env.*
