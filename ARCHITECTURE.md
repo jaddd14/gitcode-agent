@@ -8,6 +8,12 @@ Single stable-Rust Cargo package, edition 2021. The binary edge owns process exi
 - `src/brand.rs`: central product identity.
 - `scripts/check.sh`: mandatory pre-commit quality gate.
 
+## Foundation and provider boundaries
+
+`config`, `credentials`, `paths`, `theme`, `i18n`, `logging`, and `error` are library modules. Their synchronous filesystem operations must be wrapped in blocking tasks when invoked by async orchestration.
+
+`provider/canonical.rs` owns protocol-independent conversation and event types. `sse.rs` handles fragmented UTF-8 and CRLF framing. `anthropic.rs` maps Messages payloads and indexed tool-argument deltas. `transport.rs` sends progress separately from the validated final event list: callers cannot execute tools from a partial turn. Dropping the request future cancels transport IO. `retry.rs` defines bounded retry scheduling.
+
 ## Planned boundaries
 
 Config, provider adapters, agent orchestration, tools, permissions, sessions, terminal UI, extensibility, usage ledger, and headless interfaces are separate modules. No component is implemented merely by documenting its intended interface.
