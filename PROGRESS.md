@@ -7,7 +7,8 @@ M0 bootstrap complete. Task specification is outside this repository and must re
 ## Milestones
 
 - M0: complete. Source skeleton, profiles, identity, quality gate and recovery setup verified. `scripts/check.sh` and release build pass (log outside repository: `m0-check.log`, exit 0). Bootstrap contains no tests yet; test count is honestly zero.
-- M1–M17: not implemented or verified.
+- M1: complete. Typed errors, strict layered TOML configuration, explicit environment interpolation, flat theme fallbacks, ru/en UI labels, private credentials, and redacted JSONL logging. `scripts/check.sh` green: 7 unit and 2 integration tests. Release build green (`m1-green.log`, exit 0).
+- M2–M17: not implemented or verified.
 
 ## Evidence
 

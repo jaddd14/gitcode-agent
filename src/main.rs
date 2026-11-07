@@ -1,6 +1,6 @@
 //! Terminal entry point for gitcode.
 
-mod brand;
+use gitcode::brand;
 
 fn main() {
     let argument = std::env::args().nth(1);
