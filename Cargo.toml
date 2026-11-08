@@ -31,7 +31,7 @@ signal-hook = { version = "0.3", features = ["iterator"] }
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]

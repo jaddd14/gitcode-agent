@@ -295,8 +295,9 @@ fn extract(bytes: &[u8], windows: bool) -> Result<Vec<u8>, String> {
         }
         for i in 0..archive.len() {
             let file = archive.by_index(i).map_err(|e| e.to_string())?;
-            safe_member(file.name().as_bytes())?;
-            if file.name() == name || file.name() == format!("./{name}") {
+            let member = file.name().map_err(|error| error.to_string())?;
+            safe_member(member.as_bytes())?;
+            if member == name || member == format!("./{name}") {
                 if !file.is_file()
                     || file
                         .unix_mode()

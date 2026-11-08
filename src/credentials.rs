@@ -116,12 +116,12 @@ pub fn create(path: &Path, secret: &Secret) -> Result<()> {
 pub fn read(path: &Path) -> Result<Secret> {
     let metadata =
         std::fs::symlink_metadata(path).map_err(|e| io("inspect credential", path, e))?;
-    let mut allowed = metadata.is_file() && !metadata.file_type().is_symlink();
+    let allowed = metadata.is_file() && !metadata.file_type().is_symlink();
     #[cfg(unix)]
-    {
+    let allowed = {
         use std::os::unix::fs::PermissionsExt;
-        allowed &= metadata.permissions().mode() & 0o077 == 0;
-    }
+        allowed && metadata.permissions().mode() & 0o077 == 0
+    };
     if !allowed {
         return Err(io(
             "read private credential",
