@@ -69,12 +69,19 @@ fn rejection(archive: Vec<u8>, hash: Option<&str>, manifest_version: &str) -> St
         while !server_stop.load(std::sync::atomic::Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut socket, _)) => {
+                    socket.set_nonblocking(false).unwrap();
                     socket
                         .set_read_timeout(Some(std::time::Duration::from_secs(2)))
                         .unwrap();
-                    let mut request = [0; 4096];
-                    let len = socket.read(&mut request).unwrap();
-                    let request = String::from_utf8_lossy(&request[..len]);
+                    let mut request = Vec::new();
+                    while request.len() < 4096 && !request.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        match socket.read(&mut byte) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => request.push(byte[0]),
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&request);
                     let body = if request.starts_with("GET /latest.json ") {
                         &manifest
                     } else {
@@ -95,7 +102,11 @@ fn rejection(archive: Vec<u8>, hash: Option<&str>, manifest_version: &str) -> St
             }
         }
     });
-    let _env = Environment::set(&[("GITCODE_BASE_URL", Some(&base)), ("GITCODE_VERSION", None)]);
+    let _env = Environment::set(&[
+        ("GITCODE_BASE_URL", Some(&base)),
+        ("GITCODE_VERSION", None),
+        ("GITCODE_GITHUB_API_URL", Some("http://127.0.0.1:1")),
+    ]);
     let result = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(update::run());

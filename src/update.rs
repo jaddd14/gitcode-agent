@@ -186,10 +186,10 @@ async fn github(
     pin: Option<&str>,
     target: &str,
 ) -> Result<Candidate, String> {
-    let endpoint = pin.map_or_else(
-        || format!("{GITHUB_API}/latest"),
-        |v| format!("{GITHUB_API}/tags/v{v}"),
-    );
+    let api = std::env::var("GITCODE_GITHUB_API_URL").unwrap_or_else(|_| GITHUB_API.into());
+    checked_url(&api)?;
+    let api = api.trim_end_matches('/');
+    let endpoint = pin.map_or_else(|| format!("{api}/latest"), |v| format!("{api}/tags/v{v}"));
     let release: Release = serde_json::from_slice(&fetch(client, &endpoint, METADATA_LIMIT).await?)
         .map_err(|e| format!("Некорректный ответ GitHub: {e}"))?;
     let released = version(&release.tag_name)?.to_owned();
