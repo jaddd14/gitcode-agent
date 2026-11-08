@@ -1,6 +1,6 @@
 //! Workspace mutations with byte-based read guards and staged atomic replacement.
 //!
-//! Integration: export this module from `tools`, then call [`execute`] from a
+//! Integration: export this module from `tools`, then call the mutation executor from a
 //! blocking worker, serializing mutations and returning the updated read state.
 //! Permission checks belong here as well as in any interactive approval layer.
 

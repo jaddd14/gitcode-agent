@@ -1,21 +1,98 @@
 name: Deploy
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
     branches: [main]
+    types: [completed]
+  push:
+    tags: ['v*']
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  RUST_BACKTRACE: '1'
+  CARGO_TERM_COLOR: always
 jobs:
   staging:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    environment: staging
+    timeout-minutes: 30
+    environment:
+      name: staging
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Install declared toolchain
-        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
-      - name: Verify staging source
-        run: bash scripts/check.sh
-      - name: Build staging executable
-        run: cargo build --release
-      - name: Smoke test staging executable
-        run: ./target/release/gitcode --version
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - run: rustup toolchain install 1.99.0 --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: staging-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo build --release --locked
+      - name: Smoke tests
+        run: |
+          ./target/release/gitcode --version
+          ./target/release/gitcode doctor --json
+          cargo test --test foundations --locked
+      - run: tar -czf gitcode-staging-linux-x86_64.tar.gz -C target/release gitcode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-linux-x86_64
+          path: gitcode-staging-linux-x86_64.tar.gz
+  binaries:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: staging
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.99.0 --profile minimal --target ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package executable
+        run: |
+          mkdir -p dist
+          tar -czf dist/gitcode-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release gitcode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/*.tar.gz
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [staging, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cd ..
+          python3 -c 'import pathlib,re,sys; text=pathlib.Path("CHANGELOG.md").read_text(); version=sys.argv[1].removeprefix("v"); match=re.search(r"^## \["+re.escape(version)+r"\].*\n(.*?)(?=^## |\Z)",text,re.M|re.S); assert match,"Missing changelog section"; pathlib.Path("release-notes.md").write_text(match.group(1).strip()+"\n")' "$GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --verify-tag --title "gitcode ${GITHUB_REF_NAME#v}" --notes-file release-notes.md --latest

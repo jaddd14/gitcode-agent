@@ -17,7 +17,10 @@ The A1.3 resume routine was exercised again: read external state and development
 - M6: workspace editing (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `apply_patch` — `23/23` tests), bounded line diff renderer (`2/2` tests), and isolated shadow-git checkpoint store (`12/12` tests) verified.
 - M7: persistent non-interactive Bash session, background jobs (`BashOutput`, `KillShell`), and conservative quote-aware command splitter (`8/8` tests in `tests/shell.rs`) verified and wired into `Tools`.
 - M8: append-only JSONL session store with interrupted-tail recovery, forking, private Unix modes (`0600`/`0700`), hierarchical `GITCODE.md`/`CLAUDE.md`/`AGENTS.md` loader with confined `@import` expansion (`11/11` tests in `tests/sessions.rs`), and context estimation/tool-result trimming verified.
-- M9–M17: in progress.
+- M9–M14: intermediate scope closed under the speed-first policy; see tested integrations and Known gaps below.
+- M15: reproducible release/process measurements recorded; full PTY/soak budgets deferred.
+- M16: documentation and release automation in progress.
+- M17: intermediate publication verified; final release pending.
 
 ### Deferred provider acceptance work
 
@@ -43,6 +46,9 @@ Minimal Anthropic thinking replay now preserves text and concatenated signature 
 - M9/M10 intermediate: TodoWrite and Skill are registered in the tool executor; skill summaries enter the prompt, full skill bodies load on demand, and custom TUI slash templates expand through confined file inclusion. Unsupported per-command tool/model overrides fail closed. Existing agency/extensibility regressions remain green; real child loops, hooks and interactive questions remain deferred.
 - M14 intermediate: WebFetch is registered with explicit network permission, parsed URL domain enforcement, bounded streaming reads and untrusted wrapping. Search backends and local git wrapper have mock tests; full interactive git commands remain deferred.
 - Published commit `3160799` has successful CI 42459578361, Security 42459578398 and staging Deploy 42459578362. This is an actual verified staging build/smoke deployment, not a running hosted service.
+
+- M11 intermediate: permission-gated McpCall connects configured stdio/HTTP servers to the native executor. Default-mode denial regression and full quality gate passed (`fast-mcp-gate.log`, exit 0). Dynamic discovery, persistent connections and resources UI remain deferred.
+- M15 measurements (`fast-measure-release.log`, exit 0): Linux 6.8 aarch64, Rust 1.99.0; fresh release 5,289,176 bytes; warm-cache version/help average 2.20/1.70 ms over ten launches; version-only peak RSS 3,456 KiB. No PTY-first-frame or active-session performance claim.
 
 ## Known gaps
 

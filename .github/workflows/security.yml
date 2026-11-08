@@ -2,11 +2,20 @@ name: Security
 on:
   push:
   pull_request:
+  schedule:
+    - cron: '23 6 * * 1'
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  RUST_BACKTRACE: '1'
+  CARGO_TERM_COLOR: always
 permissions:
   contents: read
 jobs:
   dependency-policy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install dependency policy checker

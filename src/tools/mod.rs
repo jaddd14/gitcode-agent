@@ -47,6 +47,7 @@ impl Tools {
     /// Stable tool schemas used by all provider adapters.
     pub fn definitions() -> Vec<Tool> {
         vec![
+            tool("McpCall", "Call an explicitly configured MCP server tool; execution permission is required.", json!({"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}}), &["server","tool","arguments"]),
             tool("WebFetch", "Fetch an explicitly authorized HTTP URL as untrusted text; network permission is required.", json!({"url":{"type":"string"}}), &["url"]),
             tool("Skill", "Load an installed skill by its registered name; its content does not override permission policy.", json!({"name":{"type":"string"}}), &["name"]),
             tool("TodoWrite", "Replace the task list with current progress.", json!({"todos":{"type":"array","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]},"activeForm":{"type":"string"}},"required":["content","status"]}}}), &["todos"]),
@@ -113,6 +114,49 @@ impl Tools {
     pub async fn execute(&mut self, name: &str, input: &Value) -> Result<String, String> {
         match name {
             "TodoWrite" => return self.todos.update_from_value(input),
+            "McpCall" => {
+                let server = required(input, "server")?.to_owned();
+                let tool = required(input, "tool")?.to_owned();
+                let resource = crate::mcp::qualify_tool_name(&server, &tool)?;
+                if self.permissions.decide("McpCall", &resource, true) != Decision::Allow {
+                    return Err("MCP execution denied or requires approval".into());
+                }
+                let arguments = input
+                    .get("arguments")
+                    .filter(|value| value.is_object())
+                    .ok_or("arguments must be an object")?
+                    .clone();
+                let path = self.permissions.root.join(".mcp.json");
+                let config =
+                    tokio::task::spawn_blocking(move || crate::mcp::load_mcp_config(&path))
+                        .await
+                        .map_err(|_| "cannot load MCP configuration")?
+                        .map_err(|_| "invalid MCP configuration")?;
+                let configured = config.servers.get(&server).ok_or("unknown MCP server")?;
+                return match configured {
+                    crate::mcp::McpServerConfig::Stdio { command, args, env } => {
+                        crate::mcp::StdioMcpClient::new(
+                            command,
+                            args.clone(),
+                            env.clone(),
+                            Duration::from_secs(30),
+                        )
+                        .call_tool(&tool, arguments)
+                        .await
+                        .map_err(|_| "MCP tool request failed".into())
+                    }
+                    crate::mcp::McpServerConfig::Http { url, headers } => {
+                        crate::mcp::HttpMcpClient::new(
+                            url,
+                            headers.clone(),
+                            Duration::from_secs(30),
+                        )?
+                        .call_tool(&tool, arguments)
+                        .await
+                        .map_err(|_| "MCP tool request failed".into())
+                    }
+                };
+            }
             "WebFetch" => {
                 let url = required(input, "url")?;
                 if self.permissions.decide("WebFetch", url, true) != Decision::Allow {

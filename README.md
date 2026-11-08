@@ -55,7 +55,7 @@ export ANTHROPIC_API_KEY="<your-key>"
 ./target/release/gitcode -p "Inspect src/lib.rs and summarize the module boundaries"
 ```
 
-No published release, CI result or deployment status is asserted here. Publication remains a later acceptance gate.
+Intermediate main is published at [jaddd14/gitcode-agent](https://github.com/jaddd14/gitcode-agent). CI, Security and staging passed for `3160799`; subsequent commits require their own checks. The final v0.1.0 release is not yet verified.
 
 ## Provider endpoints
 
@@ -99,10 +99,21 @@ The quality gate runs formatting, strict Clippy and tests. Provider tests use lo
 - [Decisions](docs/dev/DECISIONS.md): engineering choices and limitations.
 - [Architecture](docs/dev/ARCHITECTURE.md): module boundaries.
 - [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), [Code of conduct](CODE_OF_CONDUCT.md).
+- Guides: [configuration](docs/configuration.md), [providers](docs/providers.md), [permissions](docs/permissions.md), [headless](docs/headless.md), [usage](docs/usage-and-cost.md).
+- Integrations: [skills](docs/skills.md), [hooks](docs/hooks.md), [MCP](docs/mcp.md), [agency](docs/subagents.md); [troubleshooting](docs/troubleshooting.md).
 
 ## Performance
 
-The final application performance budgets have **not been verified**. The existing benchmark script measures `--version` / `--help`, not first painted frame, active-session RSS, idle CPU or streaming frame latency, and may reuse an older release binary. No current numeric performance claims are made until reproducible measurements are recorded for the final build.
+Measured on Linux 6.8, aarch64, Rust 1.99.0, using a freshly rebuilt release executable on 2026-11-08:
+
+| Measurement | Result |
+| --- | --- |
+| Executable size | 5,289,176 bytes (5.04 MiB) |
+| Warm-cache `--version`, 10 launches | 2.20 ms average |
+| Warm-cache `--help`, 10 launches | 1.70 ms average |
+| Peak RSS of `--version` | 3,456 KiB (3.38 MiB) |
+
+Reproduce with `bash scripts/bench.sh`. These are process-launch measurements, **not** first-painted-frame, active-session memory, idle CPU or streaming frame latency. Those budgets and long-duration soak coverage remain unverified.
 
 ## License and acknowledgements
 

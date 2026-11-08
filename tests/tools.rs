@@ -17,6 +17,17 @@ async fn read_search_and_deny_rules() {
         .iter()
         .any(|tool| tool.name == "TodoWrite"));
     assert!(Tools::definitions().iter().any(|tool| tool.name == "Skill"));
+    assert!(Tools::definitions()
+        .iter()
+        .any(|tool| tool.name == "McpCall"));
+    assert!(tools
+        .execute(
+            "McpCall",
+            &json!({"server":"fixture","tool":"echo","arguments":{}})
+        )
+        .await
+        .unwrap_err()
+        .contains("requires approval"));
     std::fs::create_dir_all(root.join(".gitcode/skills/fixture")).unwrap();
     std::fs::write(
         root.join(".gitcode/skills/fixture/SKILL.md"),
