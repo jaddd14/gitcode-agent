@@ -30,6 +30,7 @@ impl Workspace {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
         let permissions = Engine::new(&root, Mode::AcceptEdits).unwrap();
         Self {
             root,
