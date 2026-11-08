@@ -19,7 +19,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/gitcode-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     defaults:
       run:
         shell: bash
@@ -35,7 +35,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ${{ runner.temp }}/gitcode-target
+            ${{ github.workspace }}/target
           key: ci-${{ runner.os }}-${{ runner.arch }}-1.99.0-${{ hashFiles('Cargo.lock') }}
       - name: Quality gate (format, clippy, all tests including native shell and mock integrations)
         run: bash scripts/check.sh
@@ -65,8 +65,8 @@ jobs:
         with:
           name: smoke-binary-${{ runner.os }}-${{ runner.arch }}
           path: |
-            ${{ runner.temp }}/gitcode-target/release/gitcode
-            ${{ runner.temp }}/gitcode-target/release/gitcode.exe
+            ${{ github.workspace }}/target/release/gitcode
+            ${{ github.workspace }}/target/release/gitcode.exe
           if-no-files-found: error
           retention-days: 2
   installer-smoke:
