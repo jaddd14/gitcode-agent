@@ -16,4 +16,4 @@ All notable changes are documented here. This project follows [Keep a Changelog]
 ### Known limitations
 
 - Permission prompts, OS sandboxing, complete slash commands and several advanced integrations remain unfinished; see `docs/dev/PROGRESS.md`.
-- No v0.1.0 release is claimed until release verification completes.
+- Initial release verified with Linux/macOS CI, Security and successful staging/release deployments; documented feature gaps remain.

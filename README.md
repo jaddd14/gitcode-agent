@@ -55,7 +55,7 @@ export ANTHROPIC_API_KEY="<your-key>"
 ./target/release/gitcode -p "Inspect src/lib.rs and summarize the module boundaries"
 ```
 
-Intermediate main is published at [jaddd14/gitcode-agent](https://github.com/jaddd14/gitcode-agent). CI, Security and staging passed for `3160799`; subsequent commits require their own checks. The final v0.1.0 release is not yet verified.
+[Release v0.1.0](https://github.com/jaddd14/gitcode-agent/releases/tag/v0.1.0) provides Linux x86_64 and macOS arm64 archives plus SHA256SUMS. Linux/macOS CI, Security, staging and release passed for `b3aca36`. This initial speed-first release retains the documented limitations; it does not claim full workflow parity.
 
 ## Provider endpoints
 

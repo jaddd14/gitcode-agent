@@ -58,6 +58,14 @@ Minimal Anthropic thinking replay now preserves text and concatenated signature 
 - Initial macOS-14 CI runner was cancelled before allocating a runner or executing steps. Moving to the currently supported macos-latest label; no tests are removed or weakened.
 - v0.1.0 changelog and two-target artifact/release workflow prepared; final tag and release verification are still pending. Existing pushed history is retained without force rewriting.
 
+## Verified v0.1.0 publication
+
+- Release commit: `b3aca365d70cdcc35e95104b1f71ec47e9f08185`; annotated `v0.1.0` resolves to it remotely. Linux/macOS CI [42466293350](https://github.com/jaddd14/gitcode-agent/actions/runs/42466293350) and Security [42466293296](https://github.com/jaddd14/gitcode-agent/actions/runs/42466293296) succeeded.
+- Staging [42466725316](https://github.com/jaddd14/gitcode-agent/actions/runs/42466725316) and release pipeline [42466971878](https://github.com/jaddd14/gitcode-agent/actions/runs/42466971878) succeeded. Latest staging deployment `7634015026` and release deployment `7634053941` both report `success` via API.
+- [Latest release v0.1.0](https://github.com/jaddd14/gitcode-agent/releases/tag/v0.1.0) is published, not draft/prerelease, with Linux x86_64 and macOS aarch64 tarballs and SHA256SUMS. This is a speed-first initial release with the explicit limitations below, not full workflow parity.
+- Public banner and preview raw URLs return HTTP 200; README and issue forms are available through API. Community health is 100%, license MIT, reported language Rust. Existing history was preserved; no force push performed.
+- Final evidence-only main commit and its CI/staging will be verified after pushing. M17 tag marks this evidence checkpoint, while v0.1.0 remains on the tested release source. Social preview image upload remains a manual repository-settings action; the Checks annotations endpoint returned HTTP 403 with the current token.
+
 ## Known gaps
 
 Speed-first deferrals (2026-11-08): advanced provider registry/auth/hot reload, encrypted reasoning replay and request options; Kitty negotiation; editing move-mode preservation and automatic rewind UI; interactive approval UI and OS sandbox; session picker, semantic compaction/output spilling and crash-consistent interrupted-turn persistence. Deep subagents, MCP, hooks, web and git integration are deferred until after intermediate publication. These are known limitations, not implemented parity.
