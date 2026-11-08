@@ -2,7 +2,7 @@
 
 ```bash
 gitcode -p 'Summarize src/lib.rs' --output-format stream-json
-printf 'Summarize src/lib.rs' | gitcode -p --output-format json
+printf 'Summarize src/lib.rs' | gitcode --output-format json
 ```
 
 Live stream-JSON contains `init`, `message_delta`, `thinking_delta`, and final `result` events. Init identifies the real session; result includes elapsed duration. This is newline-delimited JSON, not one JSON array. See `src/headless.rs` for the full typed event schema.

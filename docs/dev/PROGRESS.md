@@ -50,6 +50,14 @@ Minimal Anthropic thinking replay now preserves text and concatenated signature 
 - M11 intermediate: permission-gated McpCall connects configured stdio/HTTP servers to the native executor. Default-mode denial regression and full quality gate passed (`fast-mcp-gate.log`, exit 0). Dynamic discovery, persistent connections and resources UI remain deferred.
 - M15 measurements (`fast-measure-release.log`, exit 0): Linux 6.8 aarch64, Rust 1.99.0; fresh release 5,289,176 bytes; warm-cache version/help average 2.20/1.70 ms over ten launches; version-only peak RSS 3,456 KiB. No PTY-first-frame or active-session performance claim.
 
+## Release preparation evidence
+
+- `eeb73b9` passed the full quality gate, warnings-denied rustdoc and release build (`fast-release-commit.log`, exit 0), then was pushed after clean history/tree secret scans. Relative documentation links and all workflow YAML parsed successfully.
+- M16 intermediate documentation includes configuration, providers, permissions, headless, usage, skills, hooks, MCP, agency, architecture and troubleshooting. Unsupported runtime features are explicitly labelled.
+- Repository is public as specified. Description/topics/merge settings configured; vulnerability alerts, automated security fixes and private vulnerability reporting enabled. Community API reports 100% health and MIT; language API reports Rust. Checks annotation API returned 403 for the token; no extra permission was requested.
+- Initial macOS-14 CI runner was cancelled before allocating a runner or executing steps. Moving to the currently supported macos-latest label; no tests are removed or weakened.
+- v0.1.0 changelog and two-target artifact/release workflow prepared; final tag and release verification are still pending. Existing pushed history is retained without force rewriting.
+
 ## Known gaps
 
 Speed-first deferrals (2026-11-08): advanced provider registry/auth/hot reload, encrypted reasoning replay and request options; Kitty negotiation; editing move-mode preservation and automatic rewind UI; interactive approval UI and OS sandbox; session picker, semantic compaction/output spilling and crash-consistent interrupted-turn persistence. Deep subagents, MCP, hooks, web and git integration are deferred until after intermediate publication. These are known limitations, not implemented parity.
