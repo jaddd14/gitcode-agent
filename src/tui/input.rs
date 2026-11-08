@@ -1,0 +1,392 @@
+//! Pure grapheme-aware editor driven by terminal events; no polling or IO.
+
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// Action consumed by application orchestration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Visible state changed.
+    Redraw,
+    /// No action, including key release events.
+    None,
+    /// Submit the complete text, including collapsed paste contents.
+    Submit(String),
+    /// Interrupt the active turn or arm an application-level exit confirmation.
+    Interrupt,
+    /// Request application shutdown on an empty buffer.
+    Exit,
+    /// Open conversation rewind after two consecutive Escape keys.
+    Rewind,
+    /// Repaint after a resize or Ctrl+L.
+    Refresh,
+    /// Show transcript overlay.
+    Transcript,
+    /// Toggle todo overlay.
+    Todos,
+    /// Cycle permission mode.
+    CyclePermission,
+    /// Let an external completion controller accept or offer a completion.
+    Complete,
+    /// Let an external history controller open fuzzy history search.
+    SearchHistory,
+}
+/// Plain editor projection with a cell-based cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputView {
+    /// Wrapped display rows; contains no ANSI controls.
+    pub lines: Vec<String>,
+    /// Cursor row within the display rows.
+    pub cursor_row: usize,
+    /// Cursor column measured in terminal cells.
+    pub cursor_col: usize,
+}
+/// One normalized paste range in the UTF-8 buffer.
+#[derive(Debug, Clone)]
+struct Paste {
+    start: usize,
+    end: usize,
+    lines: usize,
+}
+
+/// Multiline UTF-8 buffer with session history and atomic large-paste chips.
+#[derive(Debug, Default)]
+pub struct Editor {
+    text: String,
+    cursor: usize,
+    pastes: Vec<Paste>,
+    history: Vec<String>,
+    history_at: Option<usize>,
+    draft: String,
+    escaped: bool,
+}
+impl Editor {
+    /// Current full prompt, without display-only paste chips.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    /// Current cursor as a UTF-8 byte offset on a grapheme boundary.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+    /// Load history supplied by a persistence layer, oldest first.
+    pub fn set_history(&mut self, history: Vec<String>) {
+        self.history = history;
+        self.history_at = None;
+    }
+    /// Expose session history for a persistence layer.
+    pub fn history(&self) -> &[String] {
+        &self.history
+    }
+    /// Replace the buffer, for example after accepting an external completion.
+    pub fn set_text(&mut self, text: &str) {
+        self.text = normalize(text);
+        self.cursor = self.text.len();
+        self.pastes.clear();
+        self.history_at = None;
+    }
+    fn previous(&self) -> usize {
+        if let Some(p) = self.pastes.iter().find(|p| p.end == self.cursor) {
+            return p.start;
+        }
+        self.text[..self.cursor]
+            .grapheme_indices(true)
+            .next_back()
+            .map_or(0, |(i, _)| i)
+    }
+    fn next(&self) -> usize {
+        if let Some(p) = self.pastes.iter().find(|p| p.start == self.cursor) {
+            return p.end;
+        }
+        self.text[self.cursor..]
+            .graphemes(true)
+            .next()
+            .map_or(self.cursor, |g| self.cursor + g.len())
+    }
+    fn replace(&mut self, start: usize, end: usize, replacement: &str) {
+        let added = replacement.len();
+        let removed = end - start;
+        self.pastes.retain_mut(|p| {
+            if p.end <= start {
+                true
+            } else if p.start >= end {
+                p.start = p.start + added - removed;
+                p.end = p.end + added - removed;
+                true
+            } else {
+                false
+            }
+        });
+        self.text.replace_range(start..end, replacement);
+        self.cursor = start + added;
+    }
+    fn insert(&mut self, text: &str, paste: bool) {
+        let text = normalize(text);
+        let start = self.cursor;
+        self.replace(start, start, &text);
+        let lines = text.lines().count().max(1);
+        if paste && (lines > 4 || text.chars().count() > 500) {
+            self.pastes.push(Paste {
+                start,
+                end: self.cursor,
+                lines,
+            });
+            self.pastes.sort_by_key(|p| p.start);
+        }
+    }
+    fn vertical(&mut self, down: bool) {
+        let start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+        let end = self.text[self.cursor..]
+            .find('\n')
+            .map_or(self.text.len(), |i| self.cursor + i);
+        if (!down && start == 0) || (down && end == self.text.len()) {
+            self.recall(down);
+            return;
+        }
+        let col = UnicodeWidthStr::width(&self.text[start..self.cursor]);
+        let target_start = if down {
+            end + 1
+        } else {
+            self.text[..start - 1].rfind('\n').map_or(0, |i| i + 1)
+        };
+        let target_end = self.text[target_start..]
+            .find('\n')
+            .map_or(self.text.len(), |i| target_start + i);
+        let mut used = 0;
+        self.cursor = target_start;
+        for (i, g) in self.text[target_start..target_end].grapheme_indices(true) {
+            used += UnicodeWidthStr::width(g);
+            if used > col {
+                break;
+            }
+            self.cursor = target_start + i + g.len();
+        }
+        // Vertical motion cannot place an invisible cursor inside a collapsed paste.
+        if let Some(p) = self
+            .pastes
+            .iter()
+            .find(|p| p.start < self.cursor && self.cursor < p.end)
+        {
+            self.cursor = if down { p.end } else { p.start };
+        }
+    }
+    fn recall(&mut self, down: bool) {
+        if self.history.is_empty() {
+            return;
+        }
+        let next = match (self.history_at, down) {
+            (None, true) => return,
+            (None, false) => {
+                self.draft = self.text.clone();
+                self.history.len() - 1
+            }
+            (Some(i), false) => i.saturating_sub(1),
+            (Some(i), true) if i + 1 < self.history.len() => i + 1,
+            (Some(_), true) => {
+                let draft = self.draft.clone();
+                self.set_text(&draft);
+                return;
+            }
+        };
+        let text = self.history[next].clone();
+        self.set_text(&text);
+        self.history_at = Some(next);
+    }
+    /// Apply one terminal event and return an orchestration action immediately.
+    pub fn handle(&mut self, event: Event) -> Action {
+        match event {
+            Event::Paste(text) => {
+                self.escaped = false;
+                self.insert(&text, true);
+                Action::Redraw
+            }
+            Event::Resize(_, _) => Action::Refresh,
+            Event::Key(key) if key.kind != KeyEventKind::Release => self.key(key),
+            _ => Action::None,
+        }
+    }
+    fn key(&mut self, key: KeyEvent) -> Action {
+        use KeyCode::*;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let was_escaped = std::mem::replace(&mut self.escaped, key.code == Esc);
+        match key.code {
+            Esc => {
+                return if was_escaped {
+                    self.escaped = false;
+                    Action::Rewind
+                } else {
+                    Action::Interrupt
+                }
+            }
+            Char('c') if ctrl => {
+                if self.text.is_empty() {
+                    return Action::Interrupt;
+                }
+                self.set_text("");
+            }
+            Char('d') if ctrl => {
+                if self.text.is_empty() {
+                    return Action::Exit;
+                }
+                self.replace(self.cursor, self.next(), "");
+            }
+            Char('l') if ctrl => return Action::Refresh,
+            Char('o') if ctrl => return Action::Transcript,
+            Char('t') if ctrl => return Action::Todos,
+            Char('r') if ctrl => return Action::SearchHistory,
+            BackTab => return Action::CyclePermission,
+            Tab => return Action::Complete,
+            Enter if shift => self.insert("\n", false),
+            Enter if self.text[..self.cursor].ends_with('\\') => {
+                self.replace(self.cursor - 1, self.cursor, "\n");
+            }
+            Enter => {
+                if self.text.trim().is_empty() {
+                    return Action::None;
+                }
+                let text = std::mem::take(&mut self.text);
+                if self.history.last() != Some(&text) {
+                    self.history.push(text.clone());
+                }
+                self.cursor = 0;
+                self.pastes.clear();
+                self.history_at = None;
+                return Action::Submit(text);
+            }
+            Left | Char('b') if key.code == Left || ctrl => self.cursor = self.previous(),
+            Right | Char('f') if key.code == Right || ctrl => self.cursor = self.next(),
+            Home | Char('a') if key.code == Home || ctrl => {
+                self.cursor = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+            }
+            End | Char('e') if key.code == End || ctrl => {
+                self.cursor += self.text[self.cursor..]
+                    .find('\n')
+                    .unwrap_or(self.text.len() - self.cursor);
+            }
+            Up | Char('p') if key.code == Up || ctrl => self.vertical(false),
+            Down | Char('n') if key.code == Down || ctrl => self.vertical(true),
+            Backspace => self.replace(self.previous(), self.cursor, ""),
+            Delete => self.replace(self.cursor, self.next(), ""),
+            Char('u') if ctrl => {
+                let start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
+                self.replace(start, self.cursor, "");
+            }
+            Char('k') if ctrl => {
+                let end = self.text[self.cursor..]
+                    .find('\n')
+                    .map_or(self.text.len(), |i| self.cursor + i);
+                self.replace(self.cursor, end, "");
+            }
+            Char('w') if ctrl => {
+                let mut start = self.cursor;
+                while start > 0
+                    && self.text[..start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace)
+                {
+                    start = self.text[..start]
+                        .grapheme_indices(true)
+                        .next_back()
+                        .map_or(0, |(i, _)| i);
+                }
+                while start > 0
+                    && self.text[..start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| !c.is_whitespace())
+                {
+                    start = self.text[..start]
+                        .grapheme_indices(true)
+                        .next_back()
+                        .map_or(0, |(i, _)| i);
+                }
+                self.replace(start, self.cursor, "");
+            }
+            Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.insert(&c.to_string(), false)
+            }
+            _ => return Action::None,
+        }
+        // Readline motions may jump across a chip's hidden logical lines.
+        if let Some(p) = self
+            .pastes
+            .iter()
+            .find(|p| p.start < self.cursor && self.cursor < p.end)
+        {
+            self.cursor = p.start;
+        }
+        Action::Redraw
+    }
+    /// Project the buffer to wrapped rows, collapsing large paste regions atomically.
+    pub fn view(&self, width: usize) -> InputView {
+        let mut display = String::new();
+        let mut display_cursor = 0;
+        let mut at = 0;
+        for p in &self.pastes {
+            display.push_str(&self.text[at..p.start]);
+            if self.cursor <= p.start && self.cursor >= at {
+                display_cursor = display.len() - (p.start - self.cursor);
+            }
+            display.push_str(&format!("[pasted {} lines]", p.lines));
+            at = p.end;
+        }
+        let tail = display.len();
+        display.push_str(&self.text[at..]);
+        if self.cursor >= at {
+            display_cursor = tail + self.cursor - at;
+        }
+        let width = width.max(1);
+        let mut view = InputView {
+            lines: vec![String::new()],
+            cursor_row: 0,
+            cursor_col: 0,
+        };
+        let mut col = 0;
+        for (i, g) in display.grapheme_indices(true) {
+            let cells = UnicodeWidthStr::width(g);
+            if g != "\n" && col + cells > width && col > 0 {
+                view.lines.push(String::new());
+                col = 0;
+            }
+            if i == display_cursor {
+                view.cursor_row = view.lines.len() - 1;
+                view.cursor_col = col;
+            }
+            if g == "\n" {
+                view.lines.push(String::new());
+                col = 0;
+            } else if cells <= width {
+                if let Some(line) = view.lines.last_mut() {
+                    line.push_str(g);
+                }
+                col += cells;
+                if col == width {
+                    view.lines.push(String::new());
+                    col = 0;
+                }
+            }
+        }
+        if display_cursor == display.len() {
+            view.cursor_row = view.lines.len() - 1;
+            view.cursor_col = col;
+        }
+        view
+    }
+}
+fn normalize(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .flat_map(|c| {
+            if c == '\t' {
+                "    ".chars().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}

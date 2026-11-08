@@ -2,7 +2,7 @@
 
 ## Current state
 
-M0 bootstrap complete. Task specification is outside this repository and must remain there. Credentials and machine-readable recovery state are outside this repository.
+M0–M8 core modules implemented and verified (`scripts/check.sh` green with 102 total tests: 13 unit + 89 integration). Task specification, credentials, and machine-readable recovery state are outside this repository.
 
 ## Milestones
 
@@ -10,8 +10,12 @@ M0 bootstrap complete. Task specification is outside this repository and must re
 - M1: complete. Typed errors, strict layered TOML configuration, explicit environment interpolation, flat theme fallbacks, ru/en UI labels, private credentials, and redacted JSONL logging. `scripts/check.sh` green: 7 unit and 2 integration tests. Release build green (`m1-green.log`, exit 0).
 - M2: core verified. Canonical content model, fragmented UTF-8/CRLF SSE decoding, bounded HTTP status retries, Anthropic request/stream adapter and mock TCP tests. Quality gate and release build green (`m2-full.log`, exit 0): 10 unit + 8 integration tests. Every fixture byte boundary tested; 401 safe error, truncated stream rejection and timeout cancellation verified.
 - M3: adapter core verified. Chat Completions and stateless Responses encoders/assemblers connected to HTTP transport; nine endpoint presets and explicit Chat quirks. 22 total tests pass including every fixture byte boundary and actual mock HTTP for both protocols. `m3-full.log` records quality gate and release build exit 0.
-- M4: terminal foundation in progress.
-- M5–M17: not implemented or verified.
+- M4: terminal foundation verified by 8 terminal tests (guard drop/panic/signal cleanup with injected backend, header snapshots, deterministic intro, Unicode/paste/history editor, native scrollback). Interactive entry point shares the agent with print mode.
+- M5: end-to-end agent, permission engine, native Read/LS/Glob/Grep, and streaming incremental Markdown renderer (`10/10` tests in `tests/markdown.rs`) verified.
+- M6: workspace editing (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `apply_patch` — `23/23` tests), bounded line diff renderer (`2/2` tests), and isolated shadow-git checkpoint store (`12/12` tests) verified.
+- M7: persistent non-interactive Bash session, background jobs (`BashOutput`, `KillShell`), and conservative quote-aware command splitter (`8/8` tests in `tests/shell.rs`) verified and wired into `Tools`.
+- M8: append-only JSONL session store with interrupted-tail recovery, forking, private Unix modes (`0600`/`0700`), hierarchical `GITCODE.md`/`CLAUDE.md`/`AGENTS.md` loader with confined `@import` expansion (`11/11` tests in `tests/sessions.rs`), and context estimation/tool-result trimming verified.
+- M9–M17: in progress.
 
 ### Deferred provider acceptance work
 
@@ -26,4 +30,4 @@ Signed/encrypted reasoning replay, advanced cache/tool-choice/thinking request o
 
 ## Known gaps
 
-The executable exposes only the bootstrap version command; provider libraries are tested but not yet user-facing. Agent tools, interactive TUI, extensibility, performance measurements and publication remain pending. Chat invalid-JSON repair, prompted-tools fallback, vision, registry hot reload/auth variants and full reasoning replay remain unimplemented. No DONE marker has been created.
+The executable supports interactive mode and `-p` with all three provider protocols. Interactive permission approval is not implemented: operations requiring approval fail closed. Persistent history, vim, autocomplete, attachments, custom statusLine, advanced overlays, extensibility, performance measurements and publication remain pending. Chat invalid-JSON repair, prompted-tools fallback, vision, registry hot reload/auth variants and full reasoning replay remain unimplemented. Editing uses per-file atomic renames and best-effort multi-file rollback; descriptor-relative race protection, ownership/ACL/xattr preservation and mixed-newline fidelity remain gaps. SIGKILL cannot be handled in-process. No DONE marker has been created.

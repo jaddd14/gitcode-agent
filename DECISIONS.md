@@ -1,5 +1,9 @@
 # Decisions
 
+- 2026-11-07: Add crossterm event streams for terminal input, unicode-segmentation/width for grapheme-safe editing, signal-hook for termination cleanup, ignore/regex/globset for native workspace search, and clap for typed CLI parsing. No terminal mouse capture or alternate screen is enabled.
+- 2026-11-07: Until an explicit approval UI exists, permission decisions of Ask return an error rather than granting access. Editing runs on blocking workers, serially; individual renames are atomic, multi-file transactions use best-effort rollback and are not crash-atomic.
+- 2026-11-07: Unsupported terminal actions are reported explicitly rather than simulated. Full parity remains an acceptance target, not a current product claim.
+
 - 2026-11-07: Use one edition-2021 Cargo package, stable Rust 1.99.0 (installed and verified), to minimize integration and build overhead.
 - 2026-11-07: Keep runtime branding in `src/brand.rs`; distributable names also occur in Cargo metadata, configuration directory names, memory file names, and environment variables as these interfaces are introduced.
 - 2026-11-07: Support providers through raw HTTP in Rust; the task explicitly requires Anthropic, OpenAI Chat, and Responses wire compatibility without provider-specific SDK coupling.
