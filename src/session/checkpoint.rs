@@ -102,13 +102,16 @@ impl Checkpoints {
     fn clean_git() -> Command {
         let mut command = Command::new("git");
         command.env_clear();
-        if let Some(path) = std::env::var_os("PATH") {
-            command.env("PATH", path);
+        for name in ["PATH", "SystemRoot", "COMSPEC"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
         }
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
         command
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", null)
+            .env("GIT_CONFIG_GLOBAL", null)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C");
         command
