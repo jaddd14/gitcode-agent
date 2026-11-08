@@ -234,13 +234,14 @@ async fn explicit_stream_cancellation_closes_socket_without_retry() {
         socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").await.unwrap();
         ready.send(()).unwrap();
         let mut byte = [0; 1];
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), socket.read(&mut byte))
-                .await
-                .unwrap()
-                .unwrap(),
-            0
-        );
+        let closed = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut byte))
+            .await
+            .unwrap_or_else(|_| panic!("cancelled request must close its socket promptly"));
+        match closed {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            other => panic!("expected EOF or connection reset after cancellation: {other:?}"),
+        }
         assert!(
             tokio::time::timeout(Duration::from_millis(600), listener.accept())
                 .await
