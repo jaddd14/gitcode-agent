@@ -34,6 +34,13 @@ async fn authentication_error_is_safe_and_not_retried() {
         let _ = socket.read(&mut buffer).await.unwrap();
         let body = "credential-sensitive-value";
         socket.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        drop(socket);
+        // Keep the listener alive so an accidental retry is observed, not refused.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(700), listener.accept())
+                .await
+                .is_err()
+        );
     });
     let client = Client::new(
         &format!("http://{address}"),

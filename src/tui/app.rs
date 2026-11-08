@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     agent::Agent,
-    provider::canonical::{Event as Progress, Message, Role},
+    provider::canonical::{Event as Progress, Message, Role, Usage},
     theme::{self, Theme},
 };
 use crossterm::event::{Event, EventStream};
@@ -21,6 +21,72 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
+
+// Keep deadlines independent of event arrival; dropped select futures must not
+// restart the frame delay. Skip missed frames rather than burst-rendering them.
+fn frame_clock() -> tokio::time::Interval {
+    let mut clock = tokio::time::interval(Duration::from_nanos(1_000_000_000 / 60));
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    clock
+}
+
+#[derive(Default)]
+struct LiveUsage {
+    completed: Usage,
+    current: Usage,
+}
+
+impl LiveUsage {
+    fn snapshot(&mut self, usage: Usage) {
+        self.current = usage;
+    }
+
+    // Done is the explicit validated request boundary, not the end of the turn.
+    fn finish_request(&mut self) {
+        self.completed = self.total();
+        self.current = Usage::default();
+    }
+
+    fn total(&self) -> Usage {
+        Usage {
+            input_tokens: self
+                .completed
+                .input_tokens
+                .saturating_add(self.current.input_tokens),
+            output_tokens: self
+                .completed
+                .output_tokens
+                .saturating_add(self.current.output_tokens),
+            cache_read_tokens: self
+                .completed
+                .cache_read_tokens
+                .saturating_add(self.current.cache_read_tokens),
+            cache_write_tokens: self
+                .completed
+                .cache_write_tokens
+                .saturating_add(self.current.cache_write_tokens),
+            reasoning_tokens: self
+                .completed
+                .reasoning_tokens
+                .saturating_add(self.current.reasoning_tokens),
+            estimated: self.completed.estimated || self.current.estimated,
+        }
+    }
+
+    fn apply(&self, status: &mut Status, base: &Status, elapsed: Duration) {
+        let total = self.total();
+        status.input = base.input.saturating_add(total.input_tokens);
+        status.output = base.output.saturating_add(total.output_tokens);
+        status.cache_read = base.cache_read.saturating_add(total.cache_read_tokens);
+        status.cache_write = base.cache_write.saturating_add(total.cache_write_tokens);
+        status.tokens_per_second =
+            Some(total.output_tokens as f64 / elapsed.as_secs_f64().max(0.001));
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/tui_progress/regression.rs"]
+mod regression;
 
 /// Cached startup metadata; construction must not block on git or network work.
 pub struct Options<'a> {
@@ -173,6 +239,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 let mut stream = super::markdown::Markdown::new();
                 let mut dirty = true;
                 let base = status.clone();
+                let mut live_usage = LiveUsage::default();
+                let mut frames = frame_clock();
                 let mut run = Box::pin(agent.run(request, Some(&sender)));
                 loop {
                     tokio::select! {
@@ -198,11 +266,12 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             match event {
                                 Some(Progress::TextDelta { text }) => stream.push(&text),
                                 Some(Progress::Usage { usage }) => {
-                                    status.input = base.input + usage.input_tokens;
-                                    status.output = base.output + usage.output_tokens;
-                                    status.cache_read = base.cache_read + usage.cache_read_tokens;
-                                    status.cache_write = base.cache_write + usage.cache_write_tokens;
-                                    status.tokens_per_second = Some(usage.output_tokens as f64 / started.elapsed().as_secs_f64().max(0.001));
+                                    live_usage.snapshot(usage);
+                                    live_usage.apply(&mut status, &base, started.elapsed());
+                                }
+                                Some(Progress::Done { .. }) => {
+                                    live_usage.finish_request();
+                                    live_usage.apply(&mut status, &base, started.elapsed());
                                 }
                                 _ => {},
                             }
@@ -219,7 +288,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             }
                             dirty = true;
                         }
-                        _ = tokio::time::sleep(Duration::from_millis(33)), if dirty => {
+                        _ = frames.tick(), if dirty => {
                             paint(&mut renderer, &editor, &status, &stream)?;
                             dirty = false;
                         }

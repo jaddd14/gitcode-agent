@@ -1,7 +1,56 @@
 //! Private credential storage with deliberately redacted formatting.
 
 use crate::error::{io, Result};
-use std::{fmt, fs::OpenOptions, io::Write, path::Path};
+use std::{collections::BTreeMap, fmt, fs::OpenOptions, io::Write, path::Path};
+
+/// Resolve an environment credential first, then its private file under the user home.
+/// Missing files mean unauthenticated access; unsafe or unreadable files fail closed.
+pub fn resolve(
+    home: &Path,
+    key_env: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<Secret>> {
+    if let Some(value) = env.get(key_env).filter(|value| !value.is_empty()) {
+        return Ok(Some(Secret::new(value.clone())));
+    }
+    // Environment names are also filenames; never let configuration escape the store.
+    if key_env.is_empty()
+        || !key_env
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(io(
+            "resolve credential",
+            home.join(".gitcode/credentials"),
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid credential identifier",
+            ),
+        ));
+    }
+    let directory = home.join(".gitcode/credentials");
+    match std::fs::symlink_metadata(&directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io("inspect credential store", directory, error)),
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(io(
+                "inspect credential store",
+                directory,
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "requires a regular directory",
+                ),
+            ));
+        }
+    }
+    let path = directory.join(key_env);
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io("inspect credential", path, error)),
+        Ok(_) => read(&path).map(|secret| (!secret.expose().is_empty()).then_some(secret)),
+    }
+}
 
 /// Sensitive bytes that never appear through Debug or Display.
 pub struct Secret(String);

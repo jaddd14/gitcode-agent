@@ -54,7 +54,7 @@ async fn scripted_read_then_answer_retains_tool_result() {
             let body = if turn == 0 {
                 "data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"read_1\",\"name\":\"Read\",\"input\":{\"path\":\"example.txt\"}}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
             } else {
-                "data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Проверил файл.\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+                "data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Проверил файл.\"}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
             };
             socket
                 .write_all(
@@ -83,10 +83,29 @@ async fn scripted_read_then_answer_retains_tool_result() {
         max_turns: 4,
         max_tokens: 128,
     };
+    let (progress, mut receiver) = tokio::sync::mpsc::channel(32);
     let outcome = agent
-        .run(vec![Message::text(Role::User, "read example")], None)
+        .run(
+            vec![Message::text(Role::User, "read example")],
+            Some(&progress),
+        )
         .await
         .unwrap();
+    drop(progress);
+    let mut boundaries = Vec::new();
+    let mut previous_was_usage = false;
+    while let Some(event) = receiver.recv().await {
+        match event {
+            gitcode::provider::canonical::Event::Done { reason } => {
+                assert!(previous_was_usage, "request boundary requires final usage");
+                boundaries.push(reason);
+                previous_was_usage = false;
+            }
+            gitcode::provider::canonical::Event::Usage { .. } => previous_was_usage = true,
+            _ => previous_was_usage = false,
+        }
+    }
+    assert_eq!(boundaries, ["tool_use", "end_turn"]);
     assert_eq!(outcome.text, "Проверил файл.");
     assert_eq!(outcome.requests, 2);
     assert!(outcome

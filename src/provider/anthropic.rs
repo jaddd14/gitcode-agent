@@ -5,7 +5,7 @@ use super::{
     sse::Record,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Encode the authoritative Messages wire format.
 pub fn encode(request: &Request) -> Result<Value, String> {
@@ -51,6 +51,10 @@ struct Block {
 #[derive(Default)]
 pub struct Stream {
     blocks: BTreeMap<u64, Block>,
+    open_blocks: BTreeMap<u64, String>,
+    seen_blocks: BTreeSet<u64>,
+    started: bool,
+    message_delta_seen: bool,
     usage: Usage,
     reason: String,
     done: bool,
@@ -59,6 +63,9 @@ pub struct Stream {
 impl Stream {
     /// Translate one named SSE record into canonical incremental events.
     pub fn accept(&mut self, record: Record) -> Result<Vec<Event>, String> {
+        if self.done {
+            return Err("provider event after message_stop".into());
+        }
         if record.event == "ping" {
             return Ok(vec![]);
         }
@@ -66,11 +73,25 @@ impl Stream {
             serde_json::from_str(&record.data).map_err(|_| "invalid provider event JSON")?;
         let kind = value["type"].as_str().unwrap_or(&record.event);
         let mut output = Vec::new();
+        if !self.started && !matches!(kind, "message_start" | "ping" | "error") {
+            return Err("provider event before message_start".into());
+        }
         match kind {
-            "message_start" => self.update_usage(&value["message"]["usage"]),
+            "message_start" => {
+                if self.started {
+                    return Err("duplicate message_start".into());
+                }
+                self.started = true;
+                self.update_usage(&value["message"]["usage"]);
+            }
             "content_block_start" => {
                 let index = value["index"].as_u64().ok_or("missing block index")?;
                 let block = &value["content_block"];
+                let block_type = block["type"].as_str().ok_or("missing block type")?;
+                if self.message_delta_seen || !self.seen_blocks.insert(index) {
+                    return Err("duplicate or late content block".into());
+                }
+                self.open_blocks.insert(index, block_type.to_owned());
                 if block["type"] == "tool_use" {
                     self.blocks.insert(
                         index,
@@ -84,7 +105,21 @@ impl Stream {
                 }
             }
             "content_block_delta" => {
+                let index = value["index"].as_u64().ok_or("missing block index")?;
+                let block_type = self
+                    .open_blocks
+                    .get(&index)
+                    .ok_or("delta for closed or unknown block")?;
                 let delta = &value["delta"];
+                let expected = match delta["type"].as_str() {
+                    Some("text_delta") => Some("text"),
+                    Some("thinking_delta" | "signature_delta") => Some("thinking"),
+                    Some("input_json_delta") => Some("tool_use"),
+                    _ => None,
+                };
+                if expected.is_some_and(|expected| expected != block_type) {
+                    return Err("delta does not match content block type".into());
+                }
                 match delta["type"].as_str() {
                     Some("text_delta") => output.push(Event::TextDelta {
                         text: delta["text"].as_str().ok_or("missing text delta")?.into(),
@@ -116,6 +151,9 @@ impl Stream {
             }
             "content_block_stop" => {
                 let index = value["index"].as_u64().ok_or("missing block index")?;
+                self.open_blocks
+                    .remove(&index)
+                    .ok_or("stop for closed or unknown block")?;
                 if let Some(block) = self.blocks.remove(&index) {
                     let input = if block.input.is_empty() {
                         block.initial.unwrap_or(json!({}))
@@ -123,6 +161,9 @@ impl Stream {
                         serde_json::from_str(&block.input)
                             .map_err(|_| "invalid tool argument JSON")?
                     };
+                    if !input.is_object() {
+                        return Err("tool arguments must be a JSON object".into());
+                    }
                     output.push(Event::ToolCall {
                         id: block.id,
                         name: block.name,
@@ -131,6 +172,10 @@ impl Stream {
                 }
             }
             "message_delta" => {
+                if !self.open_blocks.is_empty() {
+                    return Err("message_delta before content blocks closed".into());
+                }
+                self.message_delta_seen = true;
                 self.update_usage(&value["usage"]);
                 self.reason = value["delta"]["stop_reason"]
                     .as_str()
@@ -141,7 +186,10 @@ impl Stream {
                 });
             }
             "message_stop" => {
-                if !self.blocks.is_empty() {
+                if !self.message_delta_seen
+                    || !self.open_blocks.is_empty()
+                    || !self.blocks.is_empty()
+                {
                     return Err("message stopped with incomplete tool arguments".into());
                 }
                 self.done = true;

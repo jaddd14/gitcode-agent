@@ -36,12 +36,41 @@ impl Logger {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
+                return Err(io(
+                    "open log",
+                    path,
+                    std::io::Error::other("requires a regular file"),
+                ));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(io("inspect log", path, error));
+            }
+            _ => {}
+        }
         let file = options.open(path).map_err(|e| io("open log", path, e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| io("protect log", path, e))?;
+        }
         Ok(Self {
             file,
             path: path.to_owned(),
             secrets,
         })
+    }
+
+    /// Register a credential before handing it to a provider client.
+    pub fn add_secret(&mut self, secret: Secret) {
+        self.secrets.push(secret);
+    }
+
+    /// Remove registered secrets before an error crosses the executable boundary.
+    pub fn redact(&self, message: &str) -> String {
+        redact(message, &self.secrets)
     }
 
     /// Append a redacted JSON line without printing on stdout or stderr.

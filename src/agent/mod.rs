@@ -1,5 +1,6 @@
 //! Provider-neutral agent loop executes tools only after a validated turn.
 
+pub mod agency;
 pub mod context;
 
 use crate::{
@@ -73,6 +74,18 @@ impl Agent {
                     Event::Usage { usage: u } => turn_usage = u,
                     Event::Done { reason: r } => reason = r,
                 }
+            }
+            if let Some(progress) = progress {
+                let _ = progress
+                    .send(Event::Usage {
+                        usage: turn_usage.clone(),
+                    })
+                    .await;
+                let _ = progress
+                    .send(Event::Done {
+                        reason: reason.clone(),
+                    })
+                    .await;
             }
             usage.input_tokens += turn_usage.input_tokens;
             usage.output_tokens += turn_usage.output_tokens;
