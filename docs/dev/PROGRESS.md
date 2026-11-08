@@ -2,7 +2,7 @@
 
 ## Current state
 
-Compliance audit on 2026-11-08 supersedes earlier completion claims below. M0 bootstrap exists; M1–M16 are partial at product acceptance level and M17 is not started. Historical 102-test results apply only to the earlier core snapshot, not the current working tree. See [the per-milestone audit](docs/dev/COMPLIANCE-AUDIT.md). Task specification, credentials, and machine-readable recovery state remain outside this repository.
+Speed-first delivery policy accepted on 2026-11-08: at most 40 minutes per milestone, no independent audits of green milestones, and unresolved depth recorded under Known gaps. M0 and M1 are closed for the intermediate delivery; this is not a full-parity claim. M2 is receiving only minimal signed-thinking replay before proceeding toward a working M8. Intermediate publication is authorized after a green M8, with the original credential and secret-scan rules unchanged. See [the historical compliance audit](COMPLIANCE-AUDIT.md). Task specification, credentials, and machine-readable recovery state remain outside this repository.
 
 The A1.3 resume routine was exercised again: read external state and development records, inspected status/history/tags/tmux logs, and preserved existing work. Cargo metadata confirms one standalone package; no explicit workspace is declared. M4–M8 share one historical commit and need separate checked completion commits before retagging. Foundation integration (M1), then provider acceptance (M2/M3), precede further publication work. README now distinguishes runtime features from helpers and removes unsupported performance/parity claims. The fresh stable-tree quality gate passed: formatting, all-target Clippy with warnings denied, and 138 tests (`audit-stable-gate.log`, exit 0). This includes executable saved-key HTTP authentication and reflected-error redaction, retry/lifecycle regressions, agent request boundaries, and non-starving redraw/cumulative live-usage regressions. No current milestone completion tag has been moved.
 
@@ -21,7 +21,7 @@ The A1.3 resume routine was exercised again: read external state and development
 
 ### Deferred provider acceptance work
 
-Signed/encrypted reasoning replay, advanced cache/tool-choice/thinking request options, connection-reset and mid-stream retry, strict event-order validation and full registry remain pending. The implemented core does not yet satisfy every provider detail in the task.
+Minimal Anthropic thinking replay now preserves text and concatenated signature verbatim through canonical events into retained agent history. The regression and full gate passed (`fast-m2-gate.log`, exit 0; 139 tests). M2 is closed for intermediate delivery. Advanced request options, encrypted Responses reasoning replay, provider overload classification and registry depth remain Known gaps, not blockers for the next milestone.
 
 ## Evidence
 

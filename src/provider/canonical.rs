@@ -143,6 +143,13 @@ pub enum Event {
         /// Fragment content.
         text: String,
     },
+    /// Completed reasoning block retained verbatim for provider replay.
+    ThinkingComplete {
+        /// Original reasoning text.
+        thinking: String,
+        /// Opaque provider signature.
+        signature: Option<String>,
+    },
     /// Complete validated tool call.
     ToolCall {
         /// Unique call identifier.

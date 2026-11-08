@@ -52,6 +52,7 @@ struct Block {
 pub struct Stream {
     blocks: BTreeMap<u64, Block>,
     open_blocks: BTreeMap<u64, String>,
+    thinking_blocks: BTreeMap<u64, (String, String)>,
     seen_blocks: BTreeSet<u64>,
     started: bool,
     message_delta_seen: bool,
@@ -92,6 +93,15 @@ impl Stream {
                     return Err("duplicate or late content block".into());
                 }
                 self.open_blocks.insert(index, block_type.to_owned());
+                if block_type == "thinking" {
+                    self.thinking_blocks.insert(
+                        index,
+                        (
+                            block["thinking"].as_str().unwrap_or_default().to_owned(),
+                            block["signature"].as_str().unwrap_or_default().to_owned(),
+                        ),
+                    );
+                }
                 if block["type"] == "tool_use" {
                     self.blocks.insert(
                         index,
@@ -124,12 +134,15 @@ impl Stream {
                     Some("text_delta") => output.push(Event::TextDelta {
                         text: delta["text"].as_str().ok_or("missing text delta")?.into(),
                     }),
-                    Some("thinking_delta") => output.push(Event::ThinkingDelta {
-                        text: delta["thinking"]
-                            .as_str()
-                            .ok_or("missing thinking delta")?
-                            .into(),
-                    }),
+                    Some("thinking_delta") => {
+                        let text = delta["thinking"].as_str().ok_or("missing thinking delta")?;
+                        self.thinking_blocks
+                            .get_mut(&index)
+                            .ok_or("missing thinking block")?
+                            .0
+                            .push_str(text);
+                        output.push(Event::ThinkingDelta { text: text.into() });
+                    }
                     Some("input_json_delta") => {
                         let index = value["index"].as_u64().ok_or("missing block index")?;
                         let block = self
@@ -145,7 +158,16 @@ impl Stream {
                             return Err("tool input exceeds limit".into());
                         }
                     }
-                    Some("signature_delta") => {}
+                    Some("signature_delta") => {
+                        let signature = delta["signature"]
+                            .as_str()
+                            .ok_or("missing signature delta")?;
+                        self.thinking_blocks
+                            .get_mut(&index)
+                            .ok_or("missing thinking block")?
+                            .1
+                            .push_str(signature);
+                    }
                     _ => {}
                 }
             }
@@ -154,6 +176,12 @@ impl Stream {
                 self.open_blocks
                     .remove(&index)
                     .ok_or("stop for closed or unknown block")?;
+                if let Some((thinking, signature)) = self.thinking_blocks.remove(&index) {
+                    output.push(Event::ThinkingComplete {
+                        thinking,
+                        signature: (!signature.is_empty()).then_some(signature),
+                    });
+                }
                 if let Some(block) = self.blocks.remove(&index) {
                     let input = if block.input.is_empty() {
                         block.initial.unwrap_or(json!({}))

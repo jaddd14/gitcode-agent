@@ -94,7 +94,7 @@ The product defaults to Russian replies. Source code, development documentation 
 The quality gate runs formatting, strict Clippy and tests. Provider tests use local TCP mock servers and SSE fixtures under `testdata/`; they do not require real API credentials. Historical passing test counts do not certify current uncommitted changes.
 
 - [Compliance audit](docs/dev/COMPLIANCE-AUDIT.md): milestone-by-milestone gaps and evidence.
-- [Progress](PROGRESS.md): historical checks and current development state.
+- [Progress](docs/dev/PROGRESS.md): historical checks and current development state.
 - [Decisions](DECISIONS.md): engineering choices and limitations.
 - [Architecture](ARCHITECTURE.md): module boundaries.
 - [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), [Code of conduct](CODE_OF_CONDUCT.md).

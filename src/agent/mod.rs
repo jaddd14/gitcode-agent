@@ -70,6 +70,14 @@ impl Agent {
                 match event {
                     Event::TextDelta { text: part } => text.push_str(&part),
                     Event::ThinkingDelta { .. } => {}
+                    Event::ThinkingComplete {
+                        thinking,
+                        signature,
+                    } => content.push(Content::Thinking {
+                        thinking,
+                        signature,
+                        encrypted_content: None,
+                    }),
                     Event::ToolCall { id, name, input } => calls.push((id, name, input)),
                     Event::Usage { usage: u } => turn_usage = u,
                     Event::Done { reason: r } => reason = r,
