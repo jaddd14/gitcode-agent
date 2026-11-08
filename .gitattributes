@@ -1,0 +1,6 @@
+* text=auto eol=lf
+assets/** linguist-generated=true
+docs/** linguist-documentation=true
+testdata/** linguist-vendored=true
+scripts/** linguist-documentation=true
+*.png binary

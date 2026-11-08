@@ -1,0 +1,15 @@
+name: Security
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  dependency-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install dependency policy checker
+        run: cargo install cargo-deny --locked
+      - name: Check advisories, licenses, bans and sources
+        run: cargo deny check

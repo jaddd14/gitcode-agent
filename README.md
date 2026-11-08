@@ -96,8 +96,8 @@ The quality gate runs formatting, strict Clippy and tests. Provider tests use lo
 
 - [Compliance audit](docs/dev/COMPLIANCE-AUDIT.md): milestone-by-milestone gaps and evidence.
 - [Progress](docs/dev/PROGRESS.md): historical checks and current development state.
-- [Decisions](DECISIONS.md): engineering choices and limitations.
-- [Architecture](ARCHITECTURE.md): module boundaries.
+- [Decisions](docs/dev/DECISIONS.md): engineering choices and limitations.
+- [Architecture](docs/dev/ARCHITECTURE.md): module boundaries.
 - [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), [Code of conduct](CODE_OF_CONDUCT.md).
 
 ## Performance

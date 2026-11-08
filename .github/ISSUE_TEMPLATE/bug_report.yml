@@ -1,0 +1,22 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+labels: [bug]
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include version, OS, terminal and minimal steps. Never include credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove keys, tokens and private workspace contents.
