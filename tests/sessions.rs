@@ -33,6 +33,8 @@ impl Fixture {
                 .as_nanos(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        fs::create_dir_all(&base).unwrap();
+        let base = fs::canonicalize(base).unwrap();
         let home = base.join("home");
         let project = base.join("Project name.with spaces");
         fs::create_dir_all(&home).unwrap();

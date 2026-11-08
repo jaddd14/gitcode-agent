@@ -23,7 +23,7 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&path).unwrap();
-        Self(path)
+        Self(std::fs::canonicalize(path).unwrap())
     }
 }
 impl Drop for Fixture {

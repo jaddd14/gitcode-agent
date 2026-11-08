@@ -48,6 +48,8 @@ async fn spawn_mock_server(responses: Vec<String>) -> String {
 #[tokio::test]
 async fn end_to_end_soak_across_all_three_protocols_with_checkpoints_sessions_and_diffs() {
     let base = std::env::temp_dir().join(format!("gitcode-m15-soak-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let base = std::fs::canonicalize(base).unwrap();
     let home = base.join("home");
     let workspace = base.join("workspace");
     let shadow_storage = base.join("shadow");
