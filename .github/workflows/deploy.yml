@@ -24,11 +24,11 @@ jobs:
       name: staging
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - run: rustup toolchain install 1.99.0 --profile minimal
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -42,7 +42,7 @@ jobs:
           ./target/release/gitcode doctor --json
           cargo test --test foundations --locked
       - run: tar -czf gitcode-staging-linux-x86_64.tar.gz -C target/release gitcode
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: staging-linux-x86_64
           path: gitcode-staging-linux-x86_64.tar.gz
@@ -61,14 +61,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup toolchain install 1.99.0 --profile minimal --target ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package executable
         run: |
           mkdir -p dist
           tar -czf dist/gitcode-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release gitcode
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -83,8 +83,8 @@ jobs:
       name: release
       url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: binary-*
           path: dist
