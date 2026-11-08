@@ -4,6 +4,11 @@
 
 ### M19 validation checkpoint (2026-11-08)
 
+- CI run `42511534266`, Windows job `128825460379`: downloaded the job log through a nonce-bearing API request and an unauthenticated redirect hop. Six `tests/checkpoint.rs` tests fail at snapshot creation with `shadow git operation failed`: `invalid_paths_and_selections_are_rejected_before_changes`, `nonexistent_files_and_deleted_files_restore_exactly`, `inherited_git_configuration_cannot_escape_the_shadow_store`, `snapshots_are_independent_selected_only_and_reopenable`, `recreates_missing_parents_and_preflights_all_selected_files`, and `never_changes_user_index_history_or_unselected_files`. Store initialization succeeds. Linux/macOS jobs succeed; installer smoke is skipped.
+- Local repair replaces the canonical absolute `--git-dir` argument with `--git-dir .` inside the already validated shadow-store cwd, avoiding Rust Windows verbatim-path parsing at the Git CLI boundary. Configuration/environment isolation and storage checks remain unchanged. The CI log omits Git stderr, so the path diagnosis still requires a native Windows rerun; it is not a verified Windows success.
+- Added a shared round-trip regression using canonical storage with spaces and Unicode, binary/CRLF content, reopen, absence restoration, and no user index. On Windows it explicitly exercises a verbatim disk prefix. No existing tests were weakened.
+- Full `scripts/check.sh` passed locally after this repair: format, all-target Clippy with warnings denied, and all tests (including 14 checkpoint tests); exit 0. Command used `CARGO_TARGET_DIR=/root/.gitcode-dev/target-win CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 nice -n19`, in tmux, without concurrent builds. Log: `/root/.gitcode-dev/logs/m19-job128825460379-gate.log`. No commit, push, merge, or Windows rerun was performed.
+
 - Native Windows port remains in progress in `feat/windows`; no Windows release readiness is claimed.
 - Linux focused platform/shell/updater tests passed: 16 tests. Installer security fixtures passed: 11 tests.
 - Local Windows cross-check could not reach project code: `ring` requires the unavailable `x86_64-w64-mingw32-gcc`. Native Windows CI remains mandatory.

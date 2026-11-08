@@ -126,6 +126,34 @@ async fn snapshots_are_independent_selected_only_and_reopenable() {
     assert!(!f.storage.join("shadow.git/refs/heads/master").exists());
 }
 
+#[tokio::test]
+async fn canonical_storage_with_spaces_and_unicode_round_trips_binary_files() {
+    let f = Fixture::new();
+    let storage = f.base.join("checkpoint store Юникод");
+    std::fs::create_dir(&storage).unwrap();
+    let storage = std::fs::canonicalize(storage).unwrap();
+    #[cfg(windows)]
+    assert!(matches!(
+        storage.components().next(),
+        Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+    ));
+    let cp = Checkpoints::open(&f.root, &storage).await.unwrap();
+    f.write("nested/file", b"saved\r\n\0\xff");
+    let selected = paths(&["nested/file", "absent"]);
+    let id = cp.snapshot(&selected).await.unwrap();
+    f.write("nested/file", b"changed");
+    f.write("absent", b"created");
+    let reopened = Checkpoints::open(&f.root, &storage).await.unwrap();
+    reopened.restore(&id, &selected).await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("nested/file")).unwrap(),
+        b"saved\r\n\0\xff"
+    );
+    assert!(!f.root.join("absent").exists());
+    assert!(!storage.join("shadow.git/index").exists());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn workspace_alias_accepts_absolute_paths_but_not_symlink_files() {

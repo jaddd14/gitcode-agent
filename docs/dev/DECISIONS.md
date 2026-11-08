@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-08: Shadow Git commands use `--git-dir .` inside the validated canonical shadow-store cwd. This avoids passing Rust's Windows verbatim (`\\?\`) paths through Git's argument parser without stripping prefixes, relaxing storage validation, or inheriting user Git configuration. Native Windows CI must verify this repair.
+
 - 2026-11-08: M19 preserves the complete worktree in an external source archive before moving the uncommitted Windows delta onto the current main commit. The main worktree and stable binary remain unchanged. Native three-platform CI is mandatory before merge; missing local MinGW is not Windows compilation evidence.
 - 2026-11-08: The updater owns the sole install-origin source constant. Installer rendering reads it; generated installer copies are not independent configuration sources. The custom domain returned 404, so deployment documentation labels it to be enabled.
 - 2026-11-08: Canonicalize temporary test roots before strict session-store checks. macOS system temporary-directory symlinks must not weaken production symlink rejection. Windows subprocess tests isolate both HOME and USERPROFILE.

@@ -159,9 +159,10 @@ impl Checkpoints {
     async fn run(&self, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
         self.validate_store()?;
         let mut command = Self::clean_git();
+        // Keep Rust's canonical Windows verbatim paths out of Git's path parser.
+        // The validated working directory already identifies the isolated store.
         command
-            .arg("--git-dir")
-            .arg(&self.git_dir)
+            .args(["--git-dir", "."])
             .current_dir(&self.git_dir)
             .args(args)
             .stdin(Stdio::piped())
