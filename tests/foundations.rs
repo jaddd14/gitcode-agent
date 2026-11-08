@@ -225,6 +225,7 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
                     Err(error) => panic!("mock accept failed: {error}"),
                 }
             };
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
