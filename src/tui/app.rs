@@ -102,6 +102,11 @@ pub struct Options<'a> {
     pub permission: &'a str,
     /// Disable the skippable startup animation.
     pub no_intro: bool,
+    /// Persistent project session and recovered conversation.
+    pub session: Option<(
+        crate::session::store::SessionStore,
+        crate::session::store::Session,
+    )>,
 }
 
 fn paint(
@@ -144,8 +149,8 @@ fn local(prompt: &str, renderer: &mut Renderer<io::Stdout>) -> io::Result<bool> 
 
 /// Run the event-driven terminal UI; dropping an active run cancels transport IO.
 ///
-/// Conversation history is kept only in memory. Failed or interrupted turns retain
-/// the last completed history rather than inventing successful tool results.
+/// Completed turns are persisted when a session is supplied. Failed or interrupted
+/// turns retain the last completed history rather than inventing tool results.
 pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let (width, height) = crossterm::terminal::size()?;
@@ -192,7 +197,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
         branch: options.branch.into(),
         ..Status::default()
     };
-    let mut messages = Vec::<Message>::new();
+    let persistence = options.session;
+    let mut messages = persistence
+        .as_ref()
+        .map(|(_, session)| session.messages.clone())
+        .unwrap_or_default();
     let mut queue = VecDeque::<String>::new();
     let mut exit_armed = false;
     loop {
@@ -252,6 +261,15 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     status.cache_read = base.cache_read + outcome.usage.cache_read_tokens;
                                     status.cache_write = base.cache_write + outcome.usage.cache_write_tokens;
                                     status.tokens_per_second = Some(outcome.usage.output_tokens as f64 / started.elapsed().as_secs_f64().max(0.001));
+                                    if let Some((store, session)) = &persistence {
+                                        let store = store.clone();
+                                        let id = session.id.clone();
+                                        let appended = outcome.messages[messages.len()..].to_vec();
+                                        tokio::task::spawn_blocking(move || {
+                                            for message in appended { store.append(&id, &message)?; }
+                                            Ok::<_, io::Error>(())
+                                        }).await.map_err(io::Error::other)??;
+                                    }
                                     messages = outcome.messages;
                                     let mut completed = super::markdown::Markdown::new();
                                     completed.push(&outcome.text);

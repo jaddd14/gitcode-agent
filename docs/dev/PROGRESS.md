@@ -32,4 +32,6 @@ Minimal Anthropic thinking replay now preserves text and concatenated signature 
 
 ## Known gaps
 
+Speed-first deferrals (2026-11-08): advanced provider registry/auth/hot reload, encrypted reasoning replay and request options; Kitty negotiation; editing move-mode preservation and automatic rewind UI; interactive approval UI and OS sandbox; session picker, semantic compaction/output spilling and crash-consistent interrupted-turn persistence. Deep subagents, MCP, hooks, web and git integration are deferred until after intermediate publication. These are known limitations, not implemented parity.
+
 The executable supports interactive mode and `-p` with all three provider protocols. Interactive permission approval is not implemented: operations requiring approval fail closed. Persistent history, vim, autocomplete, attachments, custom statusLine, advanced overlays, extensibility, performance measurements and publication remain pending. Chat invalid-JSON repair, prompted-tools fallback, vision, registry hot reload/auth variants and full reasoning replay remain unimplemented. Editing uses per-file atomic renames and best-effort multi-file rollback; descriptor-relative race protection, ownership/ACL/xattr preservation and mixed-newline fidelity remain gaps. SIGKILL cannot be handled in-process. No DONE marker has been created.

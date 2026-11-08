@@ -330,6 +330,47 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         std::env::consts::OS,
         config.language
     ));
+    let session_home = home.clone();
+    let session_root = root.clone();
+    let resume_id = cli.resume.clone();
+    let continue_session = cli.continue_session;
+    let (store, session) = tokio::task::spawn_blocking(move || {
+        let store = gitcode::session::store::SessionStore::open(&session_home, &session_root)?;
+        let id = if let Some(id) = resume_id {
+            Some(id)
+        } else if continue_session {
+            Some(
+                store
+                    .list()?
+                    .first()
+                    .ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::NotFound, "no session to continue")
+                    })?
+                    .id
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        let session = match id {
+            Some(id) => store.resume(&id)?,
+            None => store.create("gitcode session", None)?,
+        };
+        Ok::<_, std::io::Error>((store, session))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let memory_home = home.clone();
+    let memory_root = root.clone();
+    let memory = tokio::task::spawn_blocking(move || {
+        gitcode::session::memory::load(&memory_home, &memory_root, &memory_root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    system.push('\n');
+    system.push_str(&memory.text);
     let mut agent = Agent {
         client,
         tools,
@@ -349,9 +390,21 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             };
             println!("{}", init.to_jsonl()?);
         }
-        let outcome = agent
-            .run(vec![Message::text(Role::User, prompt)], None)
-            .await?;
+        let committed = session.messages.len();
+        let mut history = session.messages.clone();
+        history.push(Message::text(Role::User, prompt));
+        let outcome = agent.run(history, None).await?;
+        let id = session.id.clone();
+        let appended = outcome.messages[committed..].to_vec();
+        tokio::task::spawn_blocking(move || {
+            for message in appended {
+                store.append(&id, &message)?;
+            }
+            Ok::<_, std::io::Error>(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
         match format {
             OutputFormat::Text => println!("{}", outcome.text),
             OutputFormat::Json | OutputFormat::StreamJson => {
@@ -390,6 +443,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                 branch: &branch,
                 permission: &permission,
                 no_intro: !config.intro,
+                session: Some((store, session)),
             },
         )
         .await

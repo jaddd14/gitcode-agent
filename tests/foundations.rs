@@ -194,6 +194,11 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
         let store = home.join(".gitcode/credentials");
         std::fs::create_dir_all(&store).unwrap();
         std::fs::create_dir_all(project.join(".gitcode")).unwrap();
+        std::fs::write(
+            project.join("GITCODE.md"),
+            "workspace-memory-acceptance-marker",
+        )
+        .unwrap();
         let secret = "isolated-saved-http-credential";
         credentials::create(
             &store.join("ISOLATED_HTTP_KEY"),
@@ -241,6 +246,8 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
                         })
                         .unwrap();
                     if request.len() >= end + 4 + length {
+                        assert!(String::from_utf8_lossy(&request[end + 4..])
+                            .contains("workspace-memory-acceptance-marker"));
                         assert!(
                             headers.lines().any(|line| {
                                 line.split_once(':').is_some_and(|(name, value)| {
@@ -292,6 +299,17 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
             assert_eq!(
                 String::from_utf8_lossy(&output.stdout).trim(),
                 "verified saved credential"
+            );
+            let sessions = gitcode::session::store::SessionStore::open(&home, &project).unwrap();
+            let latest = sessions.list().unwrap();
+            let saved = sessions.resume(&latest[0].id).unwrap();
+            assert_eq!(saved.messages.len(), 2);
+            assert_eq!(
+                saved.messages[0],
+                gitcode::provider::canonical::Message::text(
+                    gitcode::provider::canonical::Role::User,
+                    "check saved authentication"
+                )
             );
         }
         let log = std::fs::read(home.join(".gitcode/gitcode.log")).unwrap();
