@@ -139,6 +139,10 @@ fn unsupported(renderer: &mut Renderer<io::Stdout>) -> io::Result<()> {
     renderer.finalize("Не поддерживается в текущей версии терминального интерфейса.")
 }
 fn local(prompt: &str, renderer: &mut Renderer<io::Stdout>) -> io::Result<bool> {
+    if prompt.trim() == "/help" {
+        renderer.finalize("/help /exit /usage /cost; Ctrl+C — отмена, Ctrl+D — выход. Остальные команды пока не подключены.")?;
+        return Ok(true);
+    }
     if prompt.starts_with(['/', '!', '#']) {
         unsupported(renderer)?;
         Ok(true)
@@ -237,6 +241,25 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 if prompt.trim() == "/exit" {
                     return Ok(());
                 }
+                if matches!(prompt.trim(), "/usage" | "/cost") {
+                    let home = std::env::var_os("HOME")
+                        .map(std::path::PathBuf::from)
+                        .ok_or_else(|| io::Error::other("HOME is required"))?;
+                    let entries = tokio::task::spawn_blocking(move || {
+                        crate::usage::UsageLedger::open(&home)?.entries(None)
+                    })
+                    .await
+                    .map_err(io::Error::other)??;
+                    let summary = crate::usage::UsageSummary::from_entries(&entries);
+                    renderer.finalize(&format!(
+                        "Запросов: {}; input: {}; output: {}; {}",
+                        summary.requests,
+                        summary.input_tokens,
+                        summary.output_tokens,
+                        crate::usage::render_cost_short(&summary)
+                    ))?;
+                    continue;
+                }
                 if local(&prompt, &mut renderer)? {
                     continue;
                 }
@@ -265,7 +288,13 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                         let store = store.clone();
                                         let id = session.id.clone();
                                         let appended = outcome.messages[messages.len()..].to_vec();
+                                        let requests = outcome.request_usage.clone();
+                                        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or_else(|| io::Error::other("HOME is required"))?;
+                                        let project = session.project.clone();
+                                        let provider = options.provider.to_owned();
+                                        let model = options.model.to_owned();
                                         tokio::task::spawn_blocking(move || {
+                                            crate::usage::record_turn(&home, &id, &project, &provider, &model, &requests)?;
                                             for message in appended { store.append(&id, &message)?; }
                                             Ok::<_, io::Error>(())
                                         }).await.map_err(io::Error::other)??;

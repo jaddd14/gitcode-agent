@@ -30,6 +30,12 @@ Minimal Anthropic thinking replay now preserves text and concatenated signature 
 - Work runs inside the existing `gitcode` tmux session.
 - Recovery probe: interrupted a dedicated tmux work window, reloaded state, verified m1 still exists, and resumed M2 without reinitializing or repeating finished milestones (`resilience.log`).
 
+## Speed-first delivery updates
+
+- M13 intermediate: live message/thinking stream-JSON, actual session IDs/duration, bounded stdin and string-based stream-JSON input are wired. Executable mock regression verifies init/delta/result output.
+- M12 intermediate: validated per-request usage and latency are retained by the agent and recorded by both CLI/TUI after completed turns. Unknown cost is explicit; USD budget requests fail closed before network when pricing cannot be enforced.
+- Intermediate main `e521895` was pushed successfully to origin after clean history and working-tree secret scans. No release/CI/deployment completion is claimed.
+
 ## Known gaps
 
 Speed-first deferrals (2026-11-08): advanced provider registry/auth/hot reload, encrypted reasoning replay and request options; Kitty negotiation; editing move-mode preservation and automatic rewind UI; interactive approval UI and OS sandbox; session picker, semantic compaction/output spilling and crash-consistent interrupted-turn persistence. Deep subagents, MCP, hooks, web and git integration are deferred until after intermediate publication. These are known limitations, not implemented parity.

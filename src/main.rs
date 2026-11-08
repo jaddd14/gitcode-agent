@@ -287,6 +287,15 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         }
     }
 
+    if let Some(budget) = cli.max_budget_usd {
+        if !budget.is_finite() || budget <= 0.0 {
+            return Err("max-budget-usd must be a finite positive value".into());
+        }
+        return Err(
+            "cannot enforce USD budget without configured provider pricing; request was not sent"
+                .into(),
+        );
+    }
     let mut config = config_res.map_err(|e| e.to_string())?;
     if let Some(url) = cli.base_url {
         config.provider.base_url = url;
@@ -298,10 +307,44 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             _ => config::Protocol::Anthropic,
         };
     }
-    let prompt = match cli.command {
+    let mut prompt = match cli.command {
         Some(Commands::Exec { prompt }) => Some(prompt),
         _ => cli.prompt,
     };
+    if prompt.is_none() && !std::io::stdin().is_terminal() {
+        let input = tokio::task::spawn_blocking(|| {
+            use std::io::Read;
+            let mut text = String::new();
+            std::io::stdin()
+                .take(8 * 1024 * 1024 + 1)
+                .read_to_string(&mut text)?;
+            Ok::<_, std::io::Error>(text)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        if input.len() > 8 * 1024 * 1024 {
+            return Err("stdin exceeds 8 MiB".into());
+        }
+        let text = if cli.input_format == "stream-json" {
+            let mut parts = Vec::new();
+            for line in input.lines().filter(|line| !line.trim().is_empty()) {
+                let value: serde_json::Value =
+                    serde_json::from_str(line).map_err(|_| "invalid stdin JSON")?;
+                let text = value["text"]
+                    .as_str()
+                    .or_else(|| value["message"]["content"].as_str())
+                    .ok_or("stdin event requires text or message.content string")?;
+                parts.push(text.to_owned());
+            }
+            parts.join("\n")
+        } else {
+            input
+        };
+        if !text.trim().is_empty() {
+            prompt = Some(text);
+        }
+    }
     config
         .validate(std::path::Path::new("CLI"))
         .map_err(|e| e.to_string())?;
@@ -383,7 +426,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         let format = OutputFormat::parse(&cli.output_format)?;
         if format == OutputFormat::StreamJson {
             let init = HeadlessEvent::Init {
-                session_id: "headless".into(),
+                session_id: session.id.clone(),
                 model: config.model.clone(),
                 provider: config.provider.name.clone(),
                 tools: Tools::definitions().into_iter().map(|d| d.name).collect(),
@@ -393,10 +436,55 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         let committed = session.messages.len();
         let mut history = session.messages.clone();
         history.push(Message::text(Role::User, prompt));
-        let outcome = agent.run(history, None).await?;
+        let started = std::time::Instant::now();
+        let outcome = if format == OutputFormat::StreamJson {
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
+            let running = async {
+                let result = agent.run(history, Some(&sender)).await;
+                drop(sender);
+                result
+            };
+            let output = async {
+                while let Some(event) = receiver.recv().await {
+                    let event = match event {
+                        gitcode::provider::canonical::Event::TextDelta { text } => {
+                            Some(HeadlessEvent::MessageDelta { text })
+                        }
+                        gitcode::provider::canonical::Event::ThinkingDelta { text } => {
+                            Some(HeadlessEvent::ThinkingDelta { text })
+                        }
+                        _ => None,
+                    };
+                    if let Some(event) = event {
+                        use std::io::Write;
+                        println!("{}", event.to_jsonl()?);
+                        std::io::stdout().flush().map_err(|e| e.to_string())?;
+                    }
+                }
+                Ok::<_, String>(())
+            };
+            let (result, emitted) = tokio::join!(running, output);
+            emitted?;
+            result?
+        } else {
+            agent.run(history, None).await?
+        };
         let id = session.id.clone();
         let appended = outcome.messages[committed..].to_vec();
+        let ledger_home = home.clone();
+        let ledger_root = root.clone();
+        let ledger_provider = config.provider.name.clone();
+        let ledger_model = config.model.clone();
+        let request_usage = outcome.request_usage.clone();
         tokio::task::spawn_blocking(move || {
+            gitcode::usage::record_turn(
+                &ledger_home,
+                &id,
+                &ledger_root,
+                &ledger_provider,
+                &ledger_model,
+                &request_usage,
+            )?;
             for message in appended {
                 store.append(&id, &message)?;
             }
@@ -412,7 +500,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                     text: outcome.text,
                     usage: outcome.usage,
                     requests: outcome.requests as usize,
-                    duration_ms: 0,
+                    duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
                     is_error: false,
                 };
                 println!("{}", res.to_jsonl()?);

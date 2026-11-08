@@ -281,7 +281,12 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
             .unwrap();
         });
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_gitcode"))
-            .args(["-p", "check saved authentication"])
+            .args([
+                "-p",
+                "check saved authentication",
+                "--output-format",
+                "stream-json",
+            ])
             .env_clear()
             .env("HOME", &home)
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -296,14 +301,26 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
             String::from_utf8_lossy(&output.stderr)
         );
         if !fail {
-            assert_eq!(
-                String::from_utf8_lossy(&output.stdout).trim(),
-                "verified saved credential"
-            );
+            let events: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(events[0]["type"], "init");
+            assert!(events.iter().any(|event| event["type"] == "message_delta"
+                && event["text"] == "verified saved credential"));
+            assert_eq!(events.last().unwrap()["type"], "result");
+            assert_eq!(events.last().unwrap()["text"], "verified saved credential");
             let sessions = gitcode::session::store::SessionStore::open(&home, &project).unwrap();
             let latest = sessions.list().unwrap();
             let saved = sessions.resume(&latest[0].id).unwrap();
             assert_eq!(saved.messages.len(), 2);
+            let usage = gitcode::usage::UsageLedger::open(&home)
+                .unwrap()
+                .entries(None)
+                .unwrap();
+            assert_eq!(usage.len(), 1);
+            assert_eq!(usage[0].session_id, saved.id);
+            assert!(usage[0].cost_usd.is_none());
             assert_eq!(
                 saved.messages[0],
                 gitcode::provider::canonical::Message::text(

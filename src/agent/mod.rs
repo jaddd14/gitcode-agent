@@ -26,6 +26,8 @@ pub struct Outcome {
     pub usage: Usage,
     /// Number of provider requests.
     pub requests: u32,
+    /// Validated per-request usage and elapsed milliseconds, including retries.
+    pub request_usage: Vec<(Usage, u64)>,
 }
 
 /// A bounded model-tool loop using a single permission-aware workspace executor.
@@ -52,6 +54,7 @@ impl Agent {
         progress: Option<&mpsc::Sender<Event>>,
     ) -> Result<Outcome, String> {
         let mut usage = Usage::default();
+        let mut request_usage = Vec::new();
         for iteration in 0..self.max_turns {
             let request = Request {
                 model: self.model.clone(),
@@ -60,7 +63,9 @@ impl Agent {
                 tools: Tools::definitions(),
                 max_tokens: self.max_tokens,
             };
+            let started = std::time::Instant::now();
             let events = self.client.run(&request, progress).await?;
+            let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
             let mut content = Vec::new();
             let mut text = String::new();
             let mut calls = Vec::new();
@@ -95,6 +100,7 @@ impl Agent {
                     })
                     .await;
             }
+            request_usage.push((turn_usage.clone(), elapsed_ms));
             usage.input_tokens += turn_usage.input_tokens;
             usage.output_tokens += turn_usage.output_tokens;
             usage.cache_read_tokens += turn_usage.cache_read_tokens;
@@ -129,6 +135,7 @@ impl Agent {
                     messages,
                     usage,
                     requests: iteration + 1,
+                    request_usage,
                 });
             }
             let mut results = Vec::new();

@@ -77,6 +77,43 @@ pub struct UsageEntry {
     pub tokens_per_sec: f64,
 }
 
+/// Persist validated requests from one completed turn without inventing prices.
+pub fn record_turn(
+    home: &Path,
+    session_id: &str,
+    project: &Path,
+    provider: &str,
+    model: &str,
+    requests: &[(crate::provider::canonical::Usage, u64)],
+) -> io::Result<()> {
+    let ledger = UsageLedger::open(home)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    for (usage, latency_ms) in requests {
+        ledger.record(&UsageEntry {
+            timestamp_ms,
+            session_id: session_id.into(),
+            project: project.display().to_string(),
+            provider: provider.into(),
+            model: model.into(),
+            agent: "main".into(),
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            estimated: usage.estimated,
+            cost_usd: None,
+            latency_ms: *latency_ms,
+            tokens_per_sec: usage.output_tokens as f64 / (*latency_ms as f64 / 1000.0).max(0.001),
+        })?;
+    }
+    Ok(())
+}
+
 /// Append-only usage ledger stored at `<home>/.gitcode/usage.jsonl`.
 #[derive(Debug, Clone)]
 pub struct UsageLedger {
