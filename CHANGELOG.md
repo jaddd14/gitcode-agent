@@ -2,6 +2,27 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-11-08
+
+### Fixed
+
+- Unified terminal chrome around a muted rose hue with HSL-derived accents; removed gray metadata and purple chrome.
+- Closed header edges, padded footer tips, shared frame-title indentation, and a chevron that replaces the first prompt-row border.
+- Added a live `/theme` picker with four rose presets and soft/pure white text, preserving existing user configuration on save.
+- Corrected terminal escape stripping and added cell-level palette regressions; preserved the original intro colors and timing.
+
+## [0.2.0] - 2026-11-08
+
+### Added
+
+- Reusable terminal widget library (`Frame`, `Chip`, `Keycap`, `KeyHints`, `ProgressBar`, `Table`, `Tabs`, `BarChart`, `vertical_bar_chart`, `Sparkline`, `List`, `Spinner`, `Card`, `Divider`, `Toast`) with Unicode/ASCII fallback and snapshot coverage across widths 50–200.
+- Framed startup header block (`✿ gitcode 0.2.0`) pairing the pixel sakura mascot with aligned Russian metadata (`Модель`, `Провайдер`, `Режим`, `Папка`, `Ветка`), changelog highlights (`Новое`), and contextual tips.
+- Framed multiline prompt box (`gitcode (•ᴗ•) ~`) with mode chip footer (`DEFAULT · shift+tab`), contextual keycap hint line, and up to 12 visible input rows before internal scrolling.
+- Instant synchronous `/` slash-command popup (`Команды`) directly above the prompt box with category chips, fuzzy/prefix filtering, and `↑`/`↓`/`Tab`/`Enter`/`Esc` keyboard navigation.
+- Structured `Card` output for all 34 built-in slash commands (`docs/dev/COMMANDS.md`), including the interactive 5-tab `/usage` panel (`Сессия · Сегодня · 7 дней · 30 дней · Всё время`) with `По моделям` and `По агентам` tables, 14-day bar chart, and rate-limit summary.
+- Segmented two-zone status bar on the panel background strip with live token counters, cache totals, throughput, Rotating Russian busy activity line (`✻ Колдую…`), in-place retry notice (`▲ Лимит запросов…`), and context progress bar.
+- Native `aarch64-unknown-linux-gnu` release build target in the deployment pipeline.
+
 ## [0.1.0] - 2026-11-08
 
 ### Added

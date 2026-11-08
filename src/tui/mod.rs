@@ -1,20 +1,53 @@
 //! Event-driven terminal foundation, independent of agent and provider orchestration.
 
 pub mod app;
+pub mod commands;
 pub mod diff;
 pub mod header;
 pub mod input;
 pub mod intro;
 pub mod markdown;
+pub mod model_picker;
 pub mod render;
 pub mod statusbar;
 pub mod term;
+pub mod theme_picker;
+pub mod tool_card;
+pub mod usage_panel;
+pub mod widgets;
 
 /// Remove terminal control characters from untrusted display text.
 pub fn plain(text: &str) -> String {
-    text.chars()
-        .filter(|c| !c.is_control() || *c == '\n')
-        .collect()
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    for next in chars.by_ref() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(next) = chars.next() {
+                        if next == '\x07' {
+                            break;
+                        }
+                        if next == '\x1b' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else if !c.is_control() || c == '\n' {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Truncate text on grapheme boundaries to a terminal-cell budget.

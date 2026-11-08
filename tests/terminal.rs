@@ -126,17 +126,15 @@ fn header_plain_snapshot_news_spacing_and_pixel_geometry() {
         branch: "main",
     };
     let lines = h.lines(80, &Theme::default(), ColorMode::None);
-    assert_eq!(
-        lines.join("\n"),
-        concat!(
-            "     ▀▀▀▀▀▀        gitcode 0.1.0\n",
-            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀    test · local\n",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   /work · main\n",
-            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀    \n",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀   Новое: терминальный интерфейс\n",
-            "  ▀▀▀▀    ▀▀▀▀     Совет: Shift+Enter — новая строка\n\n\n"
-        )
-    );
+    assert!(lines[0].contains("gitcode 0.1.0"));
+    assert!(lines[0].ends_with('╮'));
+    assert!(lines[lines.len() - HEADER_GAP - 1].ends_with('╯'));
+    assert!(lines.iter().any(|line| line.contains("Модель     test")));
+    assert!(lines.iter().any(|line| line.contains("Провайдер  local")));
+    assert!(lines
+        .iter()
+        .take(lines.len() - HEADER_GAP)
+        .all(|s| unicode_width::UnicodeWidthStr::width(s.as_str()) == 80));
     assert!(lines[lines.len() - HEADER_GAP..]
         .iter()
         .all(String::is_empty));
@@ -155,15 +153,24 @@ fn native_scrollback_sync_and_plain_output() {
         ..Status::default()
     };
     let frame = Frame::input(&e, &status, 80, 24);
-    assert_eq!(frame.lines[0], "› hello");
-    assert_eq!(frame.cursor, Some((0, 7)));
+    assert!(frame.lines[0].contains("gitcode"));
+    assert!(frame.lines[1].contains("› hello"));
+    let (cursor_row, cursor_col) = frame.cursor.unwrap();
+    assert_eq!(cursor_row, 1);
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(
+            frame.lines[cursor_row].split_once("hello").unwrap().0
+        ) + "hello".len(),
+        cursor_col,
+        "cursor must follow the visible input, including the frame border"
+    );
     let mut r = Renderer::new(Vec::new(), 80, 24, ColorMode::None, true);
     r.paint(&frame).unwrap();
     r.finalize("answer\x1b[2J").unwrap();
     let output = String::from_utf8(r.into_inner()).unwrap();
     assert_eq!(output.matches("\x1b[?2026h").count(), 2);
     assert_eq!(output.matches("\x1b[?2026l").count(), 2);
-    assert!(output.contains("\x1b8\r\x1b[2A\x1b[Janswer[2J\r\n"));
+    assert!(output.contains("\x1b8\r\x1b[5A\x1b[Janswer\x1b[0m\r\n"));
     assert!(!output.contains("1049"));
     let mut r = Renderer::new(Vec::new(), 80, 24, ColorMode::None, false);
     r.paint(&frame).unwrap();

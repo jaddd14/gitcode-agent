@@ -45,9 +45,9 @@ pub fn frame(elapsed: Duration, width: usize, height: usize, mode: ColorMode) ->
                 if petal {
                     line.push_str(&foreground(
                         if row % 2 == 0 {
-                            theme.pink
+                            crate::theme::Rgb(214, 51, 108)
                         } else {
-                            theme.purple_soft
+                            crate::theme::Rgb(165, 123, 214)
                         },
                         mode,
                     ));
@@ -56,7 +56,7 @@ pub fn frame(elapsed: Duration, width: usize, height: usize, mode: ColorMode) ->
                     let top = super::header::SAKURA[row * 2].as_bytes()[col];
                     let bottom = super::header::SAKURA[row * 2 + 1].as_bytes()[col];
                     if top != b' ' || bottom != b' ' {
-                        line.push_str(&foreground(theme.pink, mode));
+                        line.push_str(&foreground(crate::theme::Rgb(214, 51, 108), mode));
                         line.push('▀');
                     } else {
                         line.push(' ');

@@ -140,7 +140,7 @@ impl Client {
                 Ok(response) => response,
                 Err(error) => {
                     // Builder errors are deterministic (for example invalid auth headers).
-                    if !error.is_builder() && self.pause(attempt, 503, None).await {
+                    if !error.is_builder() && self.pause(attempt, 503, None, progress).await {
                         continue;
                     }
                     return Err("provider connection failed".into());
@@ -155,7 +155,7 @@ impl Client {
                     .and_then(|value| retry_after(value, SystemTime::now()));
                 // Do not retain a failed response connection during backoff.
                 drop(response);
-                if self.pause(attempt, status.as_u16(), after).await {
+                if self.pause(attempt, status.as_u16(), after, progress).await {
                     continue;
                 }
                 return Err(format!("provider HTTP status {}", status.as_u16()));
@@ -167,7 +167,7 @@ impl Client {
             match self.read_stream(response, live).await {
                 Ok(events) => return Ok(events),
                 Err((message, transient)) => {
-                    if transient && self.pause(attempt, 503, None).await {
+                    if transient && self.pause(attempt, 503, None, progress).await {
                         continue;
                     }
                     return Err(message);
@@ -177,12 +177,27 @@ impl Client {
         Err("retry budget exhausted".into())
     }
 
-    async fn pause(&self, attempt: u32, status: u16, after: Option<Duration>) -> bool {
+    async fn pause(
+        &self,
+        attempt: u32,
+        status: u16,
+        after: Option<Duration>,
+        progress: Option<&mpsc::Sender<Event>>,
+    ) -> bool {
         let jitter = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos() as u64;
         if let Some(delay) = self.retry.delay(attempt, status, after, jitter) {
+            if let Some(progress) = progress {
+                let _ = progress
+                    .send(Event::RetryNotice {
+                        attempt: attempt.saturating_add(2),
+                        max_attempts: self.retry.retries.saturating_add(1),
+                        delay_ms: delay.as_millis().min(u128::from(u64::MAX)) as u64,
+                    })
+                    .await;
+            }
             tokio::time::sleep(delay).await;
             true
         } else {

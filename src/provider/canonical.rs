@@ -159,6 +159,37 @@ pub enum Event {
         /// Parsed arguments.
         input: Value,
     },
+    /// A scheduled retry, emitted before waiting for its backoff.
+    RetryNotice {
+        /// One-based number of the upcoming request attempt.
+        attempt: u32,
+        /// Total request attempts allowed, including the initial attempt.
+        max_attempts: u32,
+        /// Scheduled backoff in milliseconds.
+        delay_ms: u64,
+    },
+    /// A validated tool call is about to execute locally.
+    ToolStarted {
+        /// Original tool call identifier.
+        id: String,
+        /// Registered tool name.
+        name: String,
+        /// Parsed arguments passed to the executor.
+        input: Value,
+    },
+    /// A local tool execution completed, including permission failures.
+    ToolFinished {
+        /// Original tool call identifier.
+        id: String,
+        /// Registered tool name.
+        name: String,
+        /// Executor result, identical to the retained tool result.
+        output: String,
+        /// Whether execution failed.
+        is_error: bool,
+        /// Execution time in milliseconds, excluding progress delivery.
+        duration_ms: u64,
+    },
     /// Updated request usage.
     Usage {
         /// Provider usage counters.

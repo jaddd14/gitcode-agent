@@ -64,6 +64,8 @@ pub struct Config {
     pub compaction_threshold: f64,
     /// Enable intro animation in interactive terminals.
     pub intro: bool,
+    /// Persisted terminal palette and white-text preference.
+    pub theme: crate::theme::ThemeChoice,
 }
 
 impl Default for Config {
@@ -75,6 +77,7 @@ impl Default for Config {
             max_turns: 50,
             compaction_threshold: 0.9,
             intro: true,
+            theme: crate::theme::ThemeChoice::default(),
         }
     }
 }
@@ -247,6 +250,60 @@ fn interpolate(value: &mut toml::Value, env: &BTreeMap<String, String>) -> Resul
     Ok(())
 }
 
+/// Save only an explicitly selected theme, preserving all other user settings.
+pub fn save_theme(home: &Path, choice: crate::theme::ThemeChoice) -> Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let directory = home.join(".gitcode");
+    let path = directory.join("config.toml");
+    let mut value = match std::fs::read_to_string(&path) {
+        Ok(text) => text
+            .parse::<toml::Value>()
+            .map_err(|_| invalid(&path, "root", "invalid TOML syntax"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            toml::Value::Table(Default::default())
+        }
+        Err(error) => return Err(io("read configuration", &path, error)),
+    };
+    let encoded = toml::Value::try_from(choice)
+        .map_err(|_| invalid(&path, "theme", "cannot encode theme"))?;
+    value
+        .as_table_mut()
+        .ok_or_else(|| invalid(&path, "root", "expected a table"))?
+        .insert("theme".into(), encoded);
+    let text = toml::to_string_pretty(&value)
+        .map_err(|_| invalid(&path, "root", "cannot encode configuration"))?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| io("create configuration directory", &directory, error))?;
+    let temporary = directory.join(format!(
+        ".config.toml.{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| -> std::io::Result<()> {
+        let mut file = options.open(&temporary)?;
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            file.set_permissions(metadata.permissions())?;
+        }
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &path)?;
+        std::fs::File::open(&directory)?.sync_all()
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.map_err(|error| io("save theme configuration", path, error))
+}
+
 /// Standard configuration file paths for diagnostics.
 pub fn sources(home: &Path, project: &Path) -> [PathBuf; 3] {
     [
@@ -260,6 +317,81 @@ pub fn sources(home: &Path, project: &Path) -> [PathBuf; 3] {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_theme_save_preserves_user_configuration() {
+        let root = std::env::temp_dir().join(format!("gitcode-theme-save-{}", std::process::id()));
+        let home = root.join("home");
+        let project = root.join("project");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let empty = Overrides::new();
+        let config = load(&home, &project, &BTreeMap::new(), &empty).unwrap();
+        assert_eq!(config.theme, crate::theme::ThemeChoice::default());
+        assert!(!home.join(".gitcode").exists());
+        std::fs::create_dir_all(home.join(".gitcode")).unwrap();
+        let path = home.join(".gitcode/config.toml");
+        std::fs::write(&path, "model = 'custom-model'\nintro = false\n[provider]\nname = 'custom'\nbase_url = '${ENDPOINT}'\n").unwrap();
+        let choice = crate::theme::ThemeChoice {
+            preset: crate::theme::RosePreset::WineRose,
+            white: crate::theme::WhiteMode::Pure,
+        };
+        save_theme(&home, choice).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let value: toml::Value = contents.parse().unwrap();
+        assert_eq!(value["model"].as_str(), Some("custom-model"));
+        assert_eq!(value["intro"].as_bool(), Some(false));
+        assert_eq!(value["provider"]["name"].as_str(), Some("custom"));
+        assert_eq!(value["provider"]["base_url"].as_str(), Some("${ENDPOINT}"));
+        let env = BTreeMap::from([("ENDPOINT".into(), "https://example.com".into())]);
+        assert_eq!(load(&home, &project, &env, &empty).unwrap().theme, choice);
+        assert_eq!(std::fs::read_dir(home.join(".gitcode")).unwrap().count(), 1);
+        std::fs::write(&path, "broken = [").unwrap();
+        assert!(save_theme(&home, choice).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "broken = [");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn theme_persistence_preserves_user_settings_and_does_not_write_on_load() {
+        use crate::theme::{RosePreset, ThemeChoice, WhiteMode};
+        let home = std::env::temp_dir().join(format!("gitcode-theme-{}", std::process::id()));
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = home.join(".gitcode/config.toml");
+        assert!(!path.exists());
+        let loaded = load(&home, &project, &BTreeMap::new(), &Overrides::new()).unwrap();
+        assert_eq!(loaded.theme, ThemeChoice::default());
+        assert!(!path.exists());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "model = 'custom-model'\nintro = false\n[provider]\nname = 'custom'\nbase_url = '${BASE}/v1'\n").unwrap();
+        let choice = ThemeChoice {
+            preset: RosePreset::WineRose,
+            white: WhiteMode::Pure,
+        };
+        save_theme(&home, choice).unwrap();
+        let stored: toml::Value = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        assert_eq!(stored["model"].as_str(), Some("custom-model"));
+        assert_eq!(stored["intro"].as_bool(), Some(false));
+        assert_eq!(stored["provider"]["base_url"].as_str(), Some("${BASE}/v1"));
+        let loaded = load(
+            &home,
+            &project,
+            &BTreeMap::from([("BASE".into(), "https://example.com".into())]),
+            &Overrides::new(),
+        )
+        .unwrap();
+        assert_eq!(loaded.theme, choice);
+        assert_eq!(loaded.provider.name, "custom");
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+        std::fs::write(&path, "invalid = [").unwrap();
+        assert!(save_theme(&home, ThemeChoice::default()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "invalid = [");
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn defaults_and_validation() {

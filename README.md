@@ -26,7 +26,7 @@ A local-first terminal coding agent under development in a single Rust Cargo pac
 | Workspace tools | Read, LS, Glob, Grep, Write, Edit, MultiEdit, NotebookEdit, apply_patch | Text-oriented reads; no complete image/PDF tool path |
 | Editing | Read-before-write tracking and per-file atomic replacement | Multi-file changes are not crash-atomic; checkpoints/diffs are not integrated automatically |
 | Shell | Persistent non-interactive sessions and background-job helpers | No OS-level sandbox; restrictive parser rejects unsupported syntax |
-| Terminal | Sakura header, skippable intro, Unicode editor and streaming Markdown | Advanced completion, persistent history, permission overlays and tool blocks are unfinished |
+| Terminal | Framed Sakura header and prompt, immediate slash popup, tabbed usage, model picker, live retry/tool progress, Unicode editor and streaming Markdown | Advanced completion, persistent history and permission approval remain incomplete |
 | Headless | `-p`, `exec`, bounded stdin, text/JSON and live stream-JSON output, doctor and completions | Stream input accepts text/message.content strings; full flags/tool-event parity remains incomplete |
 | Sessions and usage | Completed CLI/TUI turns persist, `--resume`/`--continue`, project memory, per-request usage ledger | Failed/interrupted turns are not committed; prices remain unknown and USD budgets fail closed |
 | Other modules | Checkpoints, agency, commands, hooks, skills, MCP and web helpers | Module presence does not mean these are available in the interactive application |

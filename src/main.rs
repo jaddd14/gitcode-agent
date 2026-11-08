@@ -56,6 +56,8 @@ struct Cli {
     #[arg(long = "add-dir")]
     add_dirs: Vec<PathBuf>,
     #[arg(long)]
+    no_intro: bool,
+    #[arg(long)]
     verbose: bool,
 }
 
@@ -181,6 +183,9 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
     })
     .await
     .map_err(|_| "не удалось загрузить конфигурацию")?;
+    if let Ok(config) = &config_res {
+        gitcode::theme::set_active(config.theme);
+    }
     let secret = if let Ok(cfg) = &config_res {
         let home = home.clone();
         let key_env = cfg.provider.api_key_env.clone();
@@ -522,7 +527,12 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             return Err("интерактивный режим требует терминал; используйте -p \"запрос\"".into());
         }
         let cwd = root.display().to_string();
-        let permission = format!("{mode:?}");
+        let permission = match mode {
+            Mode::Default => "DEFAULT",
+            Mode::AcceptEdits => "ACCEPT EDITS",
+            Mode::Plan => "PLAN",
+            Mode::Bypass => "BYPASS",
+        };
         let branch = GitRepo::discover(&root)
             .and_then(|r| r.status_summary().ok())
             .map(|s| {
@@ -540,8 +550,8 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                 provider: &config.provider.name,
                 cwd: &cwd,
                 branch: &branch,
-                permission: &permission,
-                no_intro: !config.intro,
+                permission,
+                no_intro: cli.no_intro || !config.intro,
                 session: Some((store, session)),
             },
         )

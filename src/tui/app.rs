@@ -1,17 +1,19 @@
 //! Minimal interactive orchestration with native scrollback and cancellable turns.
 
 use super::{
+    commands,
     header::Header,
     input::{Action, Editor},
     intro::{self, IntroEnd},
     render::{Frame, Renderer},
     statusbar::Status,
     term::TerminalGuard,
+    widgets,
 };
 use crate::{
     agent::Agent,
     provider::canonical::{Event as Progress, Message, Role, Usage},
-    theme::{self, Theme},
+    theme::{self, ColorMode, Theme},
 };
 use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
@@ -116,9 +118,9 @@ fn paint(
     stream: &super::markdown::Markdown,
 ) -> io::Result<()> {
     let (width, height) = renderer.size();
-    let mut frame = Frame::input(editor, status, width, height.min(8));
+    let mut frame = Frame::input(editor, status, width.saturating_sub(1), height);
     let room = height.saturating_sub(frame.lines.len()).min(12);
-    let rendered = stream.render(width, &Theme::default(), crate::theme::ColorMode::None);
+    let rendered = stream.render(width, &Theme::default(), ColorMode::None);
     let rows = rendered.iter().rev().take(room).collect::<Vec<_>>();
     let count = rows.len();
     frame
@@ -129,26 +131,87 @@ fn paint(
     }
     renderer.paint(&frame)
 }
+
 fn action(event: Event, editor: &mut Editor, renderer: &mut Renderer<io::Stdout>) -> Action {
     if let Event::Resize(w, h) = event {
         renderer.resize(w.into(), h.into());
     }
     editor.handle(event)
 }
-fn unsupported(renderer: &mut Renderer<io::Stdout>) -> io::Result<()> {
-    renderer.finalize("Не поддерживается в текущей версии терминального интерфейса.")
+
+fn format_user_turn(prompt: &str, width: usize, theme: &Theme, mode: ColorMode) -> Vec<String> {
+    let width = width.saturating_sub(1).max(20);
+    let mut rows = Vec::new();
+    for (idx, line) in super::plain(prompt).lines().enumerate() {
+        let prefix = if idx == 0 { "│ › " } else { "│   " };
+        let clipped = widgets::fit(&format!("{prefix}{line}"), width);
+        if mode == ColorMode::None {
+            rows.push(clipped);
+        } else {
+            rows.push(format!(
+                "{}{}{clipped}",
+                theme::background(theme.panel, mode),
+                theme::foreground(theme.rose, mode),
+            ));
+        }
+    }
+    rows.push(String::new());
+    rows
 }
-fn local(prompt: &str, renderer: &mut Renderer<io::Stdout>) -> io::Result<bool> {
-    if prompt.trim() == "/help" {
-        renderer.finalize("/help /exit /usage /cost; Ctrl+C — отмена, Ctrl+D — выход. Остальные команды пока не подключены.")?;
-        return Ok(true);
+
+fn format_assistant_turn(text: &str, width: usize, theme: &Theme, mode: ColorMode) -> Vec<String> {
+    let mut completed = super::markdown::Markdown::new();
+    let glyphs = widgets::Glyphs::detect();
+    let mark = if glyphs.ascii { "*" } else { "✿" };
+    completed.push(&format!("{mark} {text}"));
+    completed.finish();
+    let mut rows = completed.render(width.min(100), theme, mode);
+    rows.push(String::new());
+    rows
+}
+
+async fn handle_aux_action(
+    act: &Action,
+    renderer: &mut Renderer<io::Stdout>,
+    editor: &mut Editor,
+    agent: &mut Agent,
+    messages: &mut Vec<Message>,
+    status: &mut Status,
+) -> io::Result<()> {
+    let width = renderer.size().0.saturating_sub(1).max(20);
+    match act {
+        Action::CyclePermission => {
+            let card = commands::cycle_permission_card(agent, status, width);
+            renderer.finalize_styled(&card)?;
+        }
+        Action::Rewind => {
+            if let Some(card) =
+                commands::execute_command("/rewind", agent, messages, status, width).await?
+            {
+                renderer.finalize_styled(&card)?;
+            }
+        }
+        Action::Transcript => {
+            let card = commands::transcript_card(messages, width);
+            renderer.finalize_styled(&card)?;
+        }
+        Action::Todos => {
+            let card = commands::todos_card(messages, width);
+            renderer.finalize_styled(&card)?;
+        }
+        Action::SearchHistory => {
+            let card = commands::history_card(editor.history(), editor.text(), width);
+            renderer.finalize_styled(&card)?;
+        }
+        Action::Complete if editor.text().starts_with('/') => {
+            let choices = commands::candidates(editor.text());
+            if let Some(first) = choices.first() {
+                editor.set_text(&format!("/{} ", first.name));
+            }
+        }
+        _ => {}
     }
-    if prompt.starts_with(['/', '!', '#']) {
-        unsupported(renderer)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    Ok(())
 }
 
 /// Run the event-driven terminal UI; dropping an active run cancels transport IO.
@@ -209,6 +272,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     let mut queue = VecDeque::<String>::new();
     let mut exit_armed = false;
     loop {
+        status.queued = queue.len();
         paint(
             &mut renderer,
             &editor,
@@ -238,11 +302,16 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             }
             Action::Submit(mut prompt) => {
                 exit_armed = false;
+                status.toast = None;
                 if let Some(command) = prompt.strip_prefix('/') {
                     let (name, args) = command
                         .split_once(char::is_whitespace)
                         .unwrap_or((command, ""));
-                    if !matches!(name, "exit" | "help" | "usage" | "cost") {
+                    let is_builtin = crate::extensibility::BUILTIN_COMMANDS
+                        .iter()
+                        .any(|c| c.name == name)
+                        || name == "new";
+                    if !is_builtin {
                         let home = std::env::var_os("HOME")
                             .map(std::path::PathBuf::from)
                             .ok_or_else(|| io::Error::other("HOME is required"))?;
@@ -276,7 +345,42 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 if prompt.trim() == "/exit" {
                     return Ok(());
                 }
-                if matches!(prompt.trim(), "/usage" | "/cost") {
+                if prompt.trim() == "/theme" {
+                    if let Some(choice) =
+                        super::theme_picker::select(&mut renderer, &mut events).await?
+                    {
+                        let home = std::env::var_os("HOME")
+                            .map(std::path::PathBuf::from)
+                            .ok_or_else(|| io::Error::other("HOME is required"))?;
+                        let saved = tokio::task::spawn_blocking(move || {
+                            crate::config::save_theme(&home, choice)
+                        })
+                        .await
+                        .map_err(io::Error::other)?;
+                        match saved {
+                            Ok(()) => {
+                                theme::set_active(choice);
+                                renderer.set_theme(Theme::default());
+                                status.toast = Some(format!("Тема: {}", choice.preset.label()));
+                            }
+                            Err(error) => {
+                                status.toast = Some(format!("Тема не сохранена: {error}"))
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if prompt.trim() == "/model" {
+                    if let Some(model) =
+                        super::model_picker::select(&mut renderer, &mut events, &agent.model)
+                            .await?
+                    {
+                        agent.model = model.clone();
+                        status.model = model;
+                    }
+                    continue;
+                }
+                if prompt.trim() == "/usage" {
                     let home = std::env::var_os("HOME")
                         .map(std::path::PathBuf::from)
                         .ok_or_else(|| io::Error::other("HOME is required"))?;
@@ -285,20 +389,89 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     })
                     .await
                     .map_err(io::Error::other)??;
-                    let summary = crate::usage::UsageSummary::from_entries(&entries);
-                    renderer.finalize(&format!(
-                        "Запросов: {}; input: {}; output: {}; {}",
-                        summary.requests,
-                        summary.input_tokens,
-                        summary.output_tokens,
-                        crate::usage::render_cost_short(&summary)
-                    ))?;
+                    let session_id = persistence
+                        .as_ref()
+                        .map(|(_, s)| s.id.as_str())
+                        .unwrap_or("");
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let mut period = 0;
+                    let mut cost_chart = false;
+                    let mut scroll = 0usize;
+                    loop {
+                        let rows = super::usage_panel::render(
+                            &entries,
+                            session_id,
+                            now,
+                            period,
+                            cost_chart,
+                            renderer.size().0.saturating_sub(1),
+                        );
+                        let lines = super::usage_panel::viewport(
+                            &rows,
+                            renderer.size().1.saturating_sub(1),
+                            &mut scroll,
+                        );
+                        renderer.paint(&Frame {
+                            lines,
+                            cursor: None,
+                        })?;
+                        let Some(event) = events.next().await else {
+                            return Ok(());
+                        };
+                        match event? {
+                            Event::Key(key) => match key.code {
+                                crossterm::event::KeyCode::Esc => break,
+                                crossterm::event::KeyCode::Tab
+                                | crossterm::event::KeyCode::Right => period = (period + 1) % 5,
+                                crossterm::event::KeyCode::Left => period = (period + 4) % 5,
+                                crossterm::event::KeyCode::Up => scroll = scroll.saturating_sub(1),
+                                crossterm::event::KeyCode::Down => {
+                                    scroll = scroll.saturating_add(1)
+                                }
+                                crossterm::event::KeyCode::PageUp => {
+                                    scroll = scroll.saturating_sub(8)
+                                }
+                                crossterm::event::KeyCode::PageDown => {
+                                    scroll = scroll.saturating_add(8)
+                                }
+                                crossterm::event::KeyCode::Char('t') => cost_chart = !cost_chart,
+                                crossterm::event::KeyCode::Char('c')
+                                    if key
+                                        .modifiers
+                                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                                {
+                                    break
+                                }
+                                _ => {}
+                            },
+                            Event::Resize(w, h) => renderer.resize(w.into(), h.into()),
+                            _ => {}
+                        }
+                    }
                     continue;
                 }
-                if local(&prompt, &mut renderer)? {
+                let card_width = renderer.size().0.saturating_sub(1);
+                if let Some(card) = commands::execute_command(
+                    &prompt,
+                    agent,
+                    &mut messages,
+                    &mut status,
+                    card_width,
+                )
+                .await?
+                {
+                    renderer.finalize_styled(&card)?;
                     continue;
                 }
-                renderer.finalize(&format!("› {prompt}"))?;
+                renderer.finalize_styled(&format_user_turn(
+                    &prompt,
+                    renderer.size().0,
+                    &Theme::default(),
+                    mode,
+                ))?;
                 let mut request = messages.clone();
                 request.push(Message::text(Role::User, prompt));
                 let (sender, mut progress) = mpsc::channel(256);
@@ -306,12 +479,19 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 let mut stream = super::markdown::Markdown::new();
                 let mut dirty = true;
                 let base = status.clone();
+                status.busy = true;
+                status.elapsed_secs = 0;
+                status.retry_notice = None;
                 let mut live_usage = LiveUsage::default();
+                let mut retry_deadline: Option<(Instant, u32, u32)> = None;
+                let mut toast_deadline: Option<Instant> = None;
                 let mut frames = frame_clock();
                 let mut run = Box::pin(agent.run(request, Some(&sender)));
                 loop {
                     tokio::select! {
                         result = &mut run => {
+                            status.busy = false;
+                            status.retry_notice = None;
                             match result {
                                 Ok(outcome) => {
                                     status.input = base.input + outcome.usage.input_tokens;
@@ -335,18 +515,45 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                         }).await.map_err(io::Error::other)??;
                                     }
                                     messages = outcome.messages;
-                                    let mut completed = super::markdown::Markdown::new();
-                                    completed.push(&outcome.text);
-                                    completed.finish();
-                                    renderer.finalize_styled(&completed.render(renderer.size().0, &Theme::default(), mode))?;
+                                    renderer.finalize_styled(&format_assistant_turn(&outcome.text, renderer.size().0, &Theme::default(), mode))?;
                                 }
-                                Err(error) => renderer.finalize(&format!("Ошибка: {error}"))?,
+                                Err(error) => {
+                                    let err_card = widgets::card(
+                                        "Ошибка",
+                                        &[
+                                            format!("Причина: {error}"),
+                                            "Совет: проверь соединение или выполни /doctor.".into(),
+                                        ],
+                                        "/doctor диагностика",
+                                        renderer.size().0.saturating_sub(1),
+                                    );
+                                    renderer.finalize_styled(&err_card)?;
+                                }
                             }
                             break;
                         }
                         event = progress.recv() => {
+                            status.elapsed_secs = started.elapsed().as_secs();
                             match event {
-                                Some(Progress::TextDelta { text }) => stream.push(&text),
+                                Some(Progress::TextDelta { text }) => {
+                                    retry_deadline = None;
+                                    status.retry_notice = None;
+                                    stream.push(&text);
+                                }
+                                Some(Progress::RetryNotice { attempt, max_attempts, delay_ms }) => {
+                                    retry_deadline = Some((Instant::now() + Duration::from_millis(delay_ms), attempt, max_attempts));
+                                }
+                                Some(Progress::ToolStarted { name, .. }) => {
+                                    retry_deadline = None;
+                                    status.retry_notice = None;
+                                    status.toast = Some(format!("Выполняется: {}", super::plain(&name)));
+                                    toast_deadline = Some(Instant::now() + Duration::from_secs(2));
+                                }
+                                Some(Progress::ToolFinished { name, output, is_error, duration_ms, .. }) => {
+                                    let card = super::tool_card::completed(&name, &output, is_error, duration_ms, renderer.size().0.saturating_sub(1));
+                                    renderer.finalize_styled(&card)?;
+                                    status.toast = None;
+                                }
                                 Some(Progress::Usage { usage }) => {
                                     live_usage.snapshot(usage);
                                     live_usage.apply(&mut status, &base, started.elapsed());
@@ -363,26 +570,68 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             let Some(event) = event else { return Ok(()); };
                             match action(event?, &mut editor, &mut renderer) {
                                 Action::Exit => return Ok(()),
-                                Action::Interrupt => { renderer.finalize("Прервано. Уже выполненные операции не отменены.")?; break; }
-                                Action::Submit(prompt) => { queue.push_back(prompt); }
-                                Action::Rewind | Action::Transcript | Action::Todos | Action::CyclePermission | Action::Complete | Action::SearchHistory => unsupported(&mut renderer)?,
+                                Action::Interrupt => {
+                                    status.busy = false;
+                                    status.retry_notice = None;
+                                    renderer.finalize("Прервано. Уже выполненные операции не отменены.")?;
+                                    break;
+                                }
+                                Action::Submit(prompt) => {
+                                    queue.push_back(prompt);
+                                    status.queued = queue.len();
+                                }
+                                Action::Transcript => {
+                                    let w = renderer.size().0.saturating_sub(1).max(20);
+                                    renderer.finalize_styled(&commands::transcript_card(&messages, w))?;
+                                }
+                                Action::Todos => {
+                                    let w = renderer.size().0.saturating_sub(1).max(20);
+                                    renderer.finalize_styled(&commands::todos_card(&messages, w))?;
+                                }
+                                Action::SearchHistory => {
+                                    let w = renderer.size().0.saturating_sub(1).max(20);
+                                    renderer.finalize_styled(&commands::history_card(editor.history(), editor.text(), w))?;
+                                }
+                                Action::CyclePermission | Action::Rewind | Action::Complete => {
+                                    status.toast = Some("Заверши или отмени [esc] активный ход".into());
+                                }
                                 _ => {},
                             }
                             dirty = true;
                         }
-                        _ = frames.tick(), if dirty => {
+                        _ = frames.tick(), if dirty || status.busy => {
+                            status.elapsed_secs = started.elapsed().as_secs();
+                            if let Some((deadline, attempt, max_attempts)) = retry_deadline {
+                                let seconds = deadline.saturating_duration_since(Instant::now()).as_millis().div_ceil(1000);
+                                status.retry_notice = Some(format!("Повтор через {seconds}с (попытка {attempt} из {max_attempts})"));
+                            }
+                            if toast_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                                status.toast = None;
+                                toast_deadline = None;
+                            }
                             paint(&mut renderer, &editor, &status, &stream)?;
                             dirty = false;
                         }
                     }
                 }
             }
-            Action::Rewind
+            other @ (Action::Rewind
             | Action::Transcript
             | Action::Todos
             | Action::CyclePermission
             | Action::Complete
-            | Action::SearchHistory => unsupported(&mut renderer)?,
+            | Action::SearchHistory) => {
+                exit_armed = false;
+                handle_aux_action(
+                    &other,
+                    &mut renderer,
+                    &mut editor,
+                    agent,
+                    &mut messages,
+                    &mut status,
+                )
+                .await?;
+            }
             Action::None => {}
             _ => exit_armed = false,
         }

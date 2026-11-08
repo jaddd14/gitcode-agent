@@ -74,7 +74,10 @@ impl Agent {
             for event in events {
                 match event {
                     Event::TextDelta { text: part } => text.push_str(&part),
-                    Event::ThinkingDelta { .. } => {}
+                    Event::ThinkingDelta { .. }
+                    | Event::RetryNotice { .. }
+                    | Event::ToolStarted { .. }
+                    | Event::ToolFinished { .. } => {}
                     Event::ThinkingComplete {
                         thinking,
                         signature,
@@ -140,11 +143,33 @@ impl Agent {
             }
             let mut results = Vec::new();
             for (id, name, input) in calls {
+                if let Some(progress) = progress {
+                    let _ = progress
+                        .send(Event::ToolStarted {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        })
+                        .await;
+                }
+                let started = std::time::Instant::now();
                 let result = self.tools.execute(&name, &input).await;
+                let duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                 let (content, is_error) = match result {
                     Ok(text) => (text, false),
                     Err(error) => (error, true),
                 };
+                if let Some(progress) = progress {
+                    let _ = progress
+                        .send(Event::ToolFinished {
+                            id: id.clone(),
+                            name: name.clone(),
+                            output: content.clone(),
+                            is_error,
+                            duration_ms,
+                        })
+                        .await;
+                }
                 results.push(Content::ToolResult {
                     tool_use_id: id,
                     content,

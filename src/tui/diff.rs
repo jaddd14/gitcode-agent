@@ -44,7 +44,7 @@ pub fn render(
         let color = match sign {
             '+' => theme.ok,
             '-' => theme.error,
-            _ => theme.dim,
+            _ => theme.text,
         };
         if mode == ColorMode::None {
             lines.push(row);

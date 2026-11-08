@@ -310,7 +310,7 @@ pub fn render_usage_panel(
     let prefix = if mode == ColorMode::None {
         String::new()
     } else {
-        foreground(theme.pink, mode)
+        foreground(theme.rose, mode)
     };
     let reset = if mode == ColorMode::None {
         ""

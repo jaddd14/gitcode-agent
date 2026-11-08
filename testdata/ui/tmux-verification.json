@@ -1,0 +1,1197 @@
+{
+  "binary_sha256": "c801e66d1710e9a7a8195f71c3295eb1bb5bab5be9a6e965cf480ba490b62689",
+  "version": "gitcode 0.2.1",
+  "normalization": "Temporary root suffix replaced with same-width X characters; ANSI removed only in .txt",
+  "captures": [
+    "tmux-startup-60",
+    "tmux-multiline-60",
+    "tmux-popup-60",
+    "tmux-popup-filtered-60",
+    "tmux-usage-empty-session-60",
+    "tmux-usage-empty-today-60",
+    "tmux-usage-empty-7days-60",
+    "tmux-usage-empty-30days-60",
+    "tmux-usage-empty-all-60",
+    "tmux-usage-empty-all-cost-60",
+    "tmux-usage-seeded-session-60",
+    "tmux-usage-seeded-today-60",
+    "tmux-usage-seeded-7days-60",
+    "tmux-usage-seeded-30days-60",
+    "tmux-usage-seeded-all-60",
+    "tmux-usage-seeded-all-cost-60",
+    "tmux-help-60",
+    "tmux-help-scrollback-60",
+    "tmux-context-60",
+    "tmux-context-scrollback-60",
+    "tmux-model-60",
+    "tmux-model-scrollback-60",
+    "tmux-model-down-60",
+    "tmux-startup-80",
+    "tmux-multiline-80",
+    "tmux-popup-80",
+    "tmux-popup-filtered-80",
+    "tmux-usage-empty-session-80",
+    "tmux-usage-empty-today-80",
+    "tmux-usage-empty-7days-80",
+    "tmux-usage-empty-30days-80",
+    "tmux-usage-empty-all-80",
+    "tmux-usage-empty-all-cost-80",
+    "tmux-usage-seeded-session-80",
+    "tmux-usage-seeded-today-80",
+    "tmux-usage-seeded-7days-80",
+    "tmux-usage-seeded-30days-80",
+    "tmux-usage-seeded-all-80",
+    "tmux-usage-seeded-all-cost-80",
+    "tmux-help-80",
+    "tmux-help-scrollback-80",
+    "tmux-context-80",
+    "tmux-context-scrollback-80",
+    "tmux-model-80",
+    "tmux-model-scrollback-80",
+    "tmux-model-down-80",
+    "tmux-startup-100",
+    "tmux-multiline-100",
+    "tmux-popup-100",
+    "tmux-popup-filtered-100",
+    "tmux-usage-empty-session-100",
+    "tmux-usage-empty-today-100",
+    "tmux-usage-empty-7days-100",
+    "tmux-usage-empty-30days-100",
+    "tmux-usage-empty-all-100",
+    "tmux-usage-empty-all-cost-100",
+    "tmux-usage-seeded-session-100",
+    "tmux-usage-seeded-today-100",
+    "tmux-usage-seeded-7days-100",
+    "tmux-usage-seeded-30days-100",
+    "tmux-usage-seeded-all-100",
+    "tmux-usage-seeded-all-cost-100",
+    "tmux-help-100",
+    "tmux-help-scrollback-100",
+    "tmux-context-100",
+    "tmux-context-scrollback-100",
+    "tmux-model-100",
+    "tmux-model-scrollback-100",
+    "tmux-model-down-100",
+    "tmux-startup-140",
+    "tmux-multiline-140",
+    "tmux-popup-140",
+    "tmux-popup-filtered-140",
+    "tmux-usage-empty-session-140",
+    "tmux-usage-empty-today-140",
+    "tmux-usage-empty-7days-140",
+    "tmux-usage-empty-30days-140",
+    "tmux-usage-empty-all-140",
+    "tmux-usage-empty-all-cost-140",
+    "tmux-usage-seeded-session-140",
+    "tmux-usage-seeded-today-140",
+    "tmux-usage-seeded-7days-140",
+    "tmux-usage-seeded-30days-140",
+    "tmux-usage-seeded-all-140",
+    "tmux-usage-seeded-all-cost-140",
+    "tmux-help-140",
+    "tmux-help-scrollback-140",
+    "tmux-context-140",
+    "tmux-context-scrollback-140",
+    "tmux-model-140",
+    "tmux-model-scrollback-140",
+    "tmux-model-down-140",
+    "tmux-startup-40x12",
+    "tmux-multiline-40x12",
+    "tmux-popup-40x12",
+    "tmux-popup-filtered-40x12",
+    "tmux-usage-empty-session-40x12",
+    "tmux-usage-empty-today-40x12",
+    "tmux-usage-empty-7days-40x12",
+    "tmux-usage-empty-30days-40x12",
+    "tmux-usage-empty-all-40x12",
+    "tmux-usage-empty-all-cost-40x12",
+    "tmux-usage-seeded-session-40x12",
+    "tmux-usage-seeded-today-40x12",
+    "tmux-usage-seeded-7days-40x12",
+    "tmux-usage-seeded-30days-40x12",
+    "tmux-usage-seeded-all-40x12",
+    "tmux-usage-seeded-all-cost-40x12",
+    "tmux-help-40x12",
+    "tmux-help-scrollback-40x12",
+    "tmux-context-40x12",
+    "tmux-context-scrollback-40x12",
+    "tmux-model-40x12",
+    "tmux-model-scrollback-40x12",
+    "tmux-model-down-40x12"
+  ],
+  "checks": [
+    {
+      "width": 60,
+      "name": "startup prompt",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "multiline input",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "slash popup",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "filtered popup",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty session card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty session request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty session full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty today card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty today request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty today full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty 7days card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty 7days request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty 30days card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty 30days request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty all card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty all request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage empty all full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded session card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded session request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded session full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded session data",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded today card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded today request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded today full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded today data",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 7days card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 7days request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 7days data",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 30days card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 30days request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded 30days data",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded all card",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded all request count",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded all full frame",
+      "passed": true
+    },
+    {
+      "width": 60,
+      "name": "usage seeded all data",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "startup prompt",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "multiline input",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "slash popup",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "filtered popup",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty session card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty session request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty session full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty today card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty today request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty today full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty 7days card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty 7days request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty 30days card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty 30days request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty all card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty all request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage empty all full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded session card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded session request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded session full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded session data",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded today card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded today request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded today full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded today data",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 7days card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 7days request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 7days data",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 30days card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 30days request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded 30days data",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded all card",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded all request count",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded all full frame",
+      "passed": true
+    },
+    {
+      "width": 80,
+      "name": "usage seeded all data",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "startup prompt",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "multiline input",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "slash popup",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "filtered popup",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty session card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty session request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty session full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty today card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty today request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty today full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty 7days card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty 7days request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty 30days card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty 30days request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty all card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty all request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage empty all full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded session card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded session request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded session full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded session data",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded today card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded today request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded today full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded today data",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 7days card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 7days request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 7days data",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 30days card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 30days request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded 30days data",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded all card",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded all request count",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded all full frame",
+      "passed": true
+    },
+    {
+      "width": 100,
+      "name": "usage seeded all data",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "startup prompt",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "multiline input",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "slash popup",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "filtered popup",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty session card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty session request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty session full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty today card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty today request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty today full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty 7days card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty 7days request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty 30days card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty 30days request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty all card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty all request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage empty all full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded session card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded session request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded session full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded session data",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded today card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded today request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded today full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded today data",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 7days card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 7days request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 7days full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 7days data",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 30days card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 30days request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 30days full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded 30days data",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded all card",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded all request count",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded all full frame",
+      "passed": true
+    },
+    {
+      "width": 140,
+      "name": "usage seeded all data",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "startup prompt",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "multiline input",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "slash popup",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "filtered popup",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty session card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty session request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty today card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty today request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty 7days card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty 7days request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty 30days card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty 30days request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty all card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage empty all request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded session card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded session request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded today card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded today request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded 7days card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded 7days request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded 30days card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded 30days request count",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded all card",
+      "passed": true
+    },
+    {
+      "width": 40,
+      "name": "usage seeded all request count",
+      "passed": true
+    }
+  ],
+  "seed": [
+    {
+      "timestamp_ms": 1794149929321,
+      "session_id": "<CURRENT>",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-priced",
+      "agent": "ui-reviewer",
+      "input_tokens": 1000,
+      "output_tokens": 200,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": 0.001,
+      "latency_ms": 1000,
+      "tokens_per_sec": 200.0
+    },
+    {
+      "timestamp_ms": 1794149929321,
+      "session_id": "<CURRENT>",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-unpriced",
+      "agent": "main",
+      "input_tokens": 1100,
+      "output_tokens": 210,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": true,
+      "cost_usd": null,
+      "latency_ms": 1000,
+      "tokens_per_sec": 210.0
+    },
+    {
+      "timestamp_ms": 1794063529321,
+      "session_id": "<CURRENT>",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-priced",
+      "agent": "main",
+      "input_tokens": 1200,
+      "output_tokens": 220,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": 0.0012000000000000001,
+      "latency_ms": 1000,
+      "tokens_per_sec": 220.0
+    },
+    {
+      "timestamp_ms": 1793890729321,
+      "session_id": "ui-other-session",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-unpriced",
+      "agent": "ui-reviewer",
+      "input_tokens": 1300,
+      "output_tokens": 230,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": null,
+      "latency_ms": 1000,
+      "tokens_per_sec": 230.0
+    },
+    {
+      "timestamp_ms": 1793631529321,
+      "session_id": "ui-other-session",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-priced",
+      "agent": "main",
+      "input_tokens": 1400,
+      "output_tokens": 240,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": 0.0014,
+      "latency_ms": 1000,
+      "tokens_per_sec": 240.0
+    },
+    {
+      "timestamp_ms": 1793458729321,
+      "session_id": "ui-other-session",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-unpriced",
+      "agent": "main",
+      "input_tokens": 1500,
+      "output_tokens": 250,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": null,
+      "latency_ms": 1000,
+      "tokens_per_sec": 250.0
+    },
+    {
+      "timestamp_ms": 1793026729321,
+      "session_id": "ui-other-session",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-priced",
+      "agent": "ui-reviewer",
+      "input_tokens": 1600,
+      "output_tokens": 260,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": 0.0016,
+      "latency_ms": 1000,
+      "tokens_per_sec": 260.0
+    },
+    {
+      "timestamp_ms": 1792421929321,
+      "session_id": "ui-other-session",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-unpriced",
+      "agent": "main",
+      "input_tokens": 1700,
+      "output_tokens": 270,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": null,
+      "latency_ms": 1000,
+      "tokens_per_sec": 270.0
+    },
+    {
+      "timestamp_ms": 1791644329321,
+      "session_id": "ui-other-session",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-priced",
+      "agent": "main",
+      "input_tokens": 1800,
+      "output_tokens": 280,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": 0.0018,
+      "latency_ms": 1000,
+      "tokens_per_sec": 280.0
+    },
+    {
+      "timestamp_ms": 1790261929321,
+      "session_id": "ui-other-session",
+      "project": "<UI_TEMP>/workspace",
+      "provider": "ui-fixture",
+      "model": "ui-unpriced",
+      "agent": "ui-reviewer",
+      "input_tokens": 1900,
+      "output_tokens": 290,
+      "cache_read_tokens": 500,
+      "cache_write_tokens": 100,
+      "reasoning_tokens": 20,
+      "estimated": false,
+      "cost_usd": null,
+      "latency_ms": 1000,
+      "tokens_per_sec": 290.0
+    }
+  ],
+  "failed_checks": 0
+}

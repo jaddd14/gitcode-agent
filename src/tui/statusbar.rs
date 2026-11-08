@@ -27,6 +27,26 @@ pub struct Status {
     pub context_percent: Option<f64>,
     /// Accumulated dollar cost; absent for unknown pricing.
     pub cost_usd: Option<f64>,
+    /// Whether an active provider turn is currently running.
+    pub busy: bool,
+    /// Elapsed wall-clock seconds for the active turn.
+    pub elapsed_secs: u64,
+    /// Single in-place retry or rate-limit notice line (`▲ ...`).
+    pub retry_notice: Option<String>,
+    /// Transient toast notification message.
+    pub toast: Option<String>,
+    /// Number of queued user prompts waiting behind the active turn.
+    pub queued: usize,
+}
+/// Compact real counts without fabricating unknown totals.
+pub fn compact(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.1}k", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
+    }
 }
 impl Status {
     /// Render safely at the current width, preserving compact counters before metadata.
@@ -43,19 +63,43 @@ impl Status {
             .cost_usd
             .filter(|n| n.is_finite() && *n >= 0.0)
             .map_or_else(|| "—".into(), |n| format!("${n:.4}"));
-        clip(
-            &format!(
-                "↑{} ↓{} · {rate} ток/с · кэш {}/{} · контекст {context} · {cost} · {} · {} · {}{}",
-                self.input,
-                self.output,
-                self.cache_read,
-                self.cache_write,
-                self.model,
-                self.permission,
-                self.branch,
-                if self.dirty { "*" } else { "" }
+        use unicode_width::UnicodeWidthStr;
+        let right = format!(
+            "ctx {context} {} │ {}{}",
+            super::widgets::progress(
+                self.context_percent.unwrap_or(0.0) / 100.0,
+                8,
+                super::widgets::Glyphs::detect()
             ),
-            width,
+            self.branch,
+            if self.dirty { "*" } else { "" }
+        );
+        let parts = [
+            format!("✿ {}", self.model),
+            format!("{}↑ {}↓", compact(self.input), compact(self.output)),
+            format!("кэш {}", compact(self.cache_read)),
+            format!("{rate} ток/с"),
+            cost,
+        ];
+        let budget = width.saturating_sub(right.width() + 1);
+        let mut left = String::new();
+        for part in parts {
+            let candidate = if left.is_empty() {
+                part
+            } else {
+                format!("{left} │ {part}")
+            };
+            if candidate.width() > budget {
+                break;
+            }
+            left = candidate;
+        }
+        if right.width() >= width {
+            return clip(&right, width);
+        }
+        format!(
+            "{}{right}",
+            super::widgets::fit(&left, width - right.width())
         )
     }
 }

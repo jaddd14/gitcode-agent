@@ -17,27 +17,117 @@ impl Frame {
     pub fn input(editor: &Editor, status: &Status, width: usize, height: usize) -> Self {
         let width = width.max(1);
         let height = height.max(1);
-        let view = editor.view(width.saturating_sub(2).max(1));
-        if height == 1 {
+        if width < 8 || height < 5 {
             return Self {
                 lines: vec![status.line(width)],
                 cursor: None,
             };
         }
-        let capacity = height - 1;
+        let glyphs = super::widgets::Glyphs::detect();
+        let view = editor.view(width.saturating_sub(4).max(1));
+        let activity_rows = usize::from(status.busy) + usize::from(status.retry_notice.is_some());
+        let capacity = height.saturating_sub(4 + activity_rows).clamp(1, 12);
         let start = (view.cursor_row + 1).saturating_sub(capacity);
-        let mut lines = view
+        let body = view
             .lines
             .iter()
             .skip(start)
             .take(capacity)
-            .map(|s| clip(&format!("› {s}"), width))
+            .map(|text| {
+                if text.is_empty() && view.lines.len() == 1 {
+                    "Спроси, или / для команд".to_owned()
+                } else {
+                    text.clone()
+                }
+            })
             .collect::<Vec<_>>();
-        let cursor = Some((
-            view.cursor_row - start,
-            (view.cursor_col + 2).min(width - 1),
+        let footer = format!("{} · shift+tab", status.permission);
+        let mut lines = super::widgets::Frame {
+            title: if glyphs.ascii {
+                "gitcode (^_^) ~"
+            } else {
+                "gitcode (•ᴗ•) ~"
+            },
+            footer: &footer,
+            glyphs,
+        }
+        .render(&body, width);
+        for (index, row) in lines.iter_mut().skip(1).take(body.len()).enumerate() {
+            let content = body.get(index).map(String::as_str).unwrap_or("");
+            let prefix = if index == 0 {
+                " › "
+            } else if glyphs.ascii {
+                "|  "
+            } else {
+                "│  "
+            };
+            let edge = if glyphs.ascii { '|' } else { '│' };
+            *row = format!(
+                "{prefix}{}{edge}",
+                super::widgets::fit(content, width.saturating_sub(4))
+            );
+        }
+        let mut cursor = Some((
+            view.cursor_row - start + 1,
+            (view.cursor_col + 3).min(width - 2),
         ));
+        let mut above = Vec::new();
+        if let Some(notice) = &status.retry_notice {
+            let prefix = if notice.starts_with('▲') {
+                ""
+            } else {
+                "▲ "
+            };
+            above.push(clip(&format!("{prefix}{notice}"), width));
+        }
+        if status.busy {
+            const VERBS: [&str; 5] = ["Думаю", "Колдую", "Цветём", "Собираю", "Проверяю"];
+            let verb = VERBS[((status.elapsed_secs / 8) % 5) as usize];
+            let mark = if glyphs.ascii { '*' } else { '✻' };
+            above.push(clip(
+                &format!(
+                    "{mark} {verb}… ({}с · ↓ {} токенов)",
+                    status.elapsed_secs,
+                    super::statusbar::compact(status.output)
+                ),
+                width,
+            ));
+        }
+        if !above.is_empty() {
+            if let Some((row, _)) = &mut cursor {
+                *row += above.len();
+            }
+            lines.splice(0..0, above);
+        }
+        let hint_line = if status.busy {
+            let base = super::widgets::key_hints(&[("esc", "отменить")], width);
+            if status.queued > 0 {
+                clip(&format!("{base} · в очереди: {}", status.queued), width)
+            } else {
+                base
+            }
+        } else if let Some(toast) = &status.toast {
+            clip(toast, width)
+        } else {
+            String::new()
+        };
+        lines.push(hint_line);
         lines.push(status.line(width));
+        if editor.completion_open() {
+            let room = height.saturating_sub(lines.len() + 4).min(9);
+            if room > 0 {
+                let popup = super::commands::popup(
+                    editor.text(),
+                    editor.completion_selected(),
+                    width,
+                    room,
+                );
+                if let Some((row, _)) = &mut cursor {
+                    *row += popup.len();
+                }
+                lines.splice(0..0, popup);
+            }
+        }
         Self { lines, cursor }
     }
 }
@@ -68,6 +158,10 @@ impl<W: Write> Renderer<W> {
     /// Update geometry; the next event-driven paint reflows its frame.
     pub fn resize(&mut self, width: usize, height: usize) {
         self.size = (width.max(1), height.max(1));
+    }
+    /// Apply a selected palette to subsequent live and finalized output.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
     }
     /// Current terminal width and height.
     pub fn size(&self) -> (usize, usize) {
@@ -104,7 +198,8 @@ impl<W: Write> Renderer<W> {
         self.sync(|this| {
             this.clear_live()?;
             for line in text.split('\n') {
-                write!(this.writer, "{line}\r\n")?;
+                let line = super::widgets::style_frame_row(line, &this.theme, this.mode);
+                write!(this.writer, "{line}\x1b[0m\r\n")?;
             }
             Ok(())
         })
@@ -151,7 +246,8 @@ impl<W: Write> Renderer<W> {
                     if styled {
                         line.clone()
                     } else {
-                        clip(line, this.size.0.saturating_sub(1).max(1))
+                        let text = clip(line, this.size.0.saturating_sub(1).max(1));
+                        super::widgets::style_frame_row(&text, &this.theme, this.mode)
                     }
                 )?;
             }

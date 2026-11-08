@@ -60,11 +60,25 @@ pub struct Editor {
     history_at: Option<usize>,
     draft: String,
     escaped: bool,
+    completion_closed: bool,
+    completion_selected: usize,
 }
 impl Editor {
     /// Current full prompt, without display-only paste chips.
     pub fn text(&self) -> &str {
         &self.text
+    }
+    /// Whether slash completion should be visible without any IO.
+    pub fn completion_open(&self) -> bool {
+        self.text.starts_with('/') && !self.completion_closed
+    }
+    /// Current bounded slash selection.
+    pub fn completion_selected(&self) -> usize {
+        self.completion_selected.min(
+            super::commands::candidates(&self.text)
+                .len()
+                .saturating_sub(1),
+        )
     }
     /// Current cursor as a UTF-8 byte offset on a grapheme boundary.
     pub fn cursor(&self) -> usize {
@@ -81,6 +95,8 @@ impl Editor {
     }
     /// Replace the buffer, for example after accepting an external completion.
     pub fn set_text(&mut self, text: &str) {
+        self.completion_closed = false;
+        self.completion_selected = 0;
         self.text = normalize(text);
         self.cursor = self.text.len();
         self.pastes.clear();
@@ -105,6 +121,8 @@ impl Editor {
             .map_or(self.cursor, |g| self.cursor + g.len())
     }
     fn replace(&mut self, start: usize, end: usize, replacement: &str) {
+        self.completion_closed = false;
+        self.completion_selected = 0;
         let added = replacement.len();
         let removed = end - start;
         self.pastes.retain_mut(|p| {
@@ -210,6 +228,38 @@ impl Editor {
         use KeyCode::*;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if self.completion_open() && !ctrl {
+            let choices = super::commands::candidates(&self.text);
+            let selected = self.completion_selected();
+            match key.code {
+                Esc => {
+                    self.completion_closed = true;
+                    self.escaped = false;
+                    return Action::Redraw;
+                }
+                Up => {
+                    self.completion_selected = selected.saturating_sub(1);
+                    return Action::Redraw;
+                }
+                Down => {
+                    self.completion_selected = (selected + 1).min(choices.len().saturating_sub(1));
+                    return Action::Redraw;
+                }
+                Tab | Enter if !shift && !self.text.contains(char::is_whitespace) => {
+                    if let Some(command) = choices.get(selected) {
+                        let command = format!("/{}", command.name);
+                        self.set_text(&command);
+                        if key.code == Tab {
+                            self.text.push(' ');
+                            self.cursor = self.text.len();
+                            return Action::Redraw;
+                        }
+                        self.completion_closed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
         let was_escaped = std::mem::replace(&mut self.escaped, key.code == Esc);
         match key.code {
             Esc => {

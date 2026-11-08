@@ -194,24 +194,23 @@
   <rect x="138" y="201" width="7" height="7" fill="#D6336C"/>
   <rect x="110" y="138" width="3" height="3" fill="#EFE6F7"/>
   <rect x="152" y="138" width="3" height="3" fill="#EFE6F7"/>
-  <text x="204" y="124" font-family="DejaVu Sans Mono, monospace" font-size="26" font-weight="700">
-    <tspan fill="#EFE6F7">git</tspan><tspan fill="#D6336C">code</tspan>
-    <tspan fill="#9684AD" font-size="16"> v0.16.5</tspan>
-  </text>
-  <text x="204" y="152" font-family="DejaVu Sans Mono, monospace" font-size="14" fill="#EFE6F7">Rust terminal coding agent</text>
-  <text x="204" y="176" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#9684AD">workspace: /root/gitcode-agent</text>
-  <text x="204" y="200" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#A57BD6">provider: anthropic + openai wire</text>
+  <text x="204" y="102" font-family="DejaVu Sans Mono, monospace" font-size="15" font-weight="700" fill="#F06595">╭─ ✿ gitcode 0.2.0 ────────────────────────────────────────────────╮</text>
+  <text x="204" y="124" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7"><tspan fill="#9684AD">Модель     </tspan>claude-sonnet-4-20250514</text>
+  <text x="204" y="144" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7"><tspan fill="#9684AD">Провайдер  </tspan>anthropic</text>
+  <text x="204" y="164" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7"><tspan fill="#9684AD">Режим      </tspan><tspan fill="#D6336C">[DEFAULT]</tspan></text>
+  <text x="204" y="184" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7"><tspan fill="#9684AD">Папка      </tspan>~/gitcode-agent</text>
+  <text x="204" y="204" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7"><tspan fill="#9684AD">Ветка      </tspan>main</text>
 
-  <!-- Divider between left mascot identity and right "What's new" panel -->
+  <!-- Divider between left mascot identity and right "Новое" panel -->
   <line x1="560" y1="92" x2="560" y2="224" stroke="#3B2356" stroke-width="2"/>
 
-  <!-- Right header column: "What's new" news panel -->
-  <text x="588" y="116" font-family="DejaVu Sans Mono, monospace" font-size="15" font-weight="700" fill="#F06595">What&#39;s new</text>
+  <!-- Right header column: "Новое" news panel -->
+  <text x="588" y="116" font-family="DejaVu Sans Mono, monospace" font-size="15" font-weight="700" fill="#F06595">Новое</text>
   <rect x="588" y="124" width="110" height="3" fill="#D6336C"/>
-  <text x="588" y="148" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">• Flat Sakura Theme &amp; crisp pixel brand kit</text>
-  <text x="588" y="172" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">• Parallel worktree subagents with live token meter</text>
-  <text x="588" y="196" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">• Pre/Post tool lifecycle hooks &amp; MCP stdio bridge</text>
-  <text x="588" y="218" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#9684AD">Tip: press /help for commands or Shift+Tab for plan mode</text>
+  <text x="588" y="148" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">+ Панель /usage по периодам, моделям и агентам</text>
+  <text x="588" y="172" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">+ Мгновенные подсказки команд по клавише /</text>
+  <text x="588" y="196" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">+ Выравнивание рамок и таблиц по ширине символов</text>
+  <text x="588" y="218" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#9684AD">Совет: Нажми / для списка команд или Shift+Tab для смены режима</text>
 
   <!-- 3 blank spacer rows in transcript viewport (explicitly represented) -->
   <rect x="44" y="244" width="1112" height="18" fill="#130B1D"/>
@@ -254,27 +253,35 @@
   <!-- Context line 46 -->
   <text x="64" y="550" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#9684AD">  46 │ pub const BORDER_DIM:  &amp;str = &quot;#3B2356&quot;;</text>
 
-  <!-- Input box -->
-  <rect x="44" y="586" width="1112" height="72" rx="8" fill="#1C1128" stroke="#7A3FB5" stroke-width="2"/>
-  <text x="68" y="628" font-family="DejaVu Sans Mono, monospace" font-size="16" font-weight="700" fill="#D6336C">❯</text>
-  <text x="92" y="628" font-family="DejaVu Sans Mono, monospace" font-size="15" fill="#EFE6F7">cargo test --all-targets &amp;&amp; verify flat sakura palette</text>
-  <rect x="584" y="612" width="10" height="20" fill="#F06595"/>
+  <!-- Framed Prompt box (1:1 M18 layout) -->
+  <rect x="44" y="580" width="1112" height="66" rx="8" fill="#1C1128" stroke="#D6336C" stroke-width="2"/>
+  <text x="64" y="585" font-family="DejaVu Sans Mono, monospace" font-size="13" font-weight="700" fill="#F06595"> gitcode (•ᴗ•) ~ </text>
+  <text x="68" y="618" font-family="DejaVu Sans Mono, monospace" font-size="16" font-weight="700" fill="#D6336C">›</text>
+  <text x="92" y="618" font-family="DejaVu Sans Mono, monospace" font-size="15" fill="#9684AD">Спроси, или / для команд</text>
+  <text x="1136" y="644" text-anchor="end" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#F06595"> DEFAULT · shift+tab </text>
+  <text x="58" y="664" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#9684AD">[?] подсказки · [/] команды · [@] файл</text>
 
-  <!-- Bottom status bar with tokens/s, model, branch -->
-  <rect x="44" y="674" width="1112" height="42" rx="6" fill="#1C1128" stroke="#3B2356" stroke-width="1.5"/>
+  <!-- Segmented two-zone status bar on panel strip -->
+  <rect x="44" y="676" width="1112" height="40" rx="6" fill="#1C1128" stroke="#3B2356" stroke-width="1.5"/>
+  <text x="62" y="701" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">
+    <tspan fill="#F06595" font-weight="700">✿ claude-sonnet-4</tspan>
+    <tspan fill="#3B2356"> │ </tspan>
+    <tspan fill="#EFE6F7">↑58.6k ↓10.8k</tspan>
+    <tspan fill="#3B2356"> │ </tspan>
+    <tspan fill="#9684AD">кэш 1.1M</tspan>
+    <tspan fill="#3B2356"> │ </tspan>
+    <tspan fill="#7BD389">1.6 ток/с</tspan>
+    <tspan fill="#3B2356"> │ </tspan>
+    <tspan fill="#9684AD">○ 0м12с</tspan>
+  </text>
 
-  <!-- Branch pill -->
-  <rect x="58" y="683" width="148" height="24" rx="4" fill="#130B1D" stroke="#4A1D7A" stroke-width="1"/>
-  <text x="72" y="700" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#F06595">⎇ branch: main</text>
-
-  <!-- Model pill -->
-  <rect x="218" y="683" width="248" height="24" rx="4" fill="#130B1D" stroke="#4A1D7A" stroke-width="1"/>
-  <text x="232" y="700" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#A57BD6">◆ model: claude-sonnet-4</text>
-
-  <!-- Tokens/s pill -->
-  <rect x="478" y="683" width="210" height="24" rx="4" fill="#130B1D" stroke="#4A1D7A" stroke-width="1"/>
-  <text x="492" y="700" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#7BD389">⚡ 84.2 tokens/s · 12.4k</text>
-
-  <!-- Right-side label in status bar -->
-  <text x="1136" y="700" text-anchor="end" font-family="DejaVu Sans Mono, monospace" font-size="12" fill="#9684AD">Illustration — gitcode TUI</text>
+  <!-- Right-side context progress and branch in status bar -->
+  <text x="1136" y="701" text-anchor="end" font-family="DejaVu Sans Mono, monospace" font-size="13" fill="#EFE6F7">
+    <tspan fill="#9684AD">ctx 6% </tspan>
+    <tspan fill="#F06595">██░░░░░░</tspan>
+    <tspan fill="#9684AD"> 12.0k/200k</tspan>
+    <tspan fill="#3B2356"> │ </tspan>
+    <tspan fill="#A57BD6">main</tspan>
+    <tspan fill="#9684AD"> · Illustration</tspan>
+  </text>
 </svg>

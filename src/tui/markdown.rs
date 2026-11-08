@@ -525,11 +525,8 @@ fn paint(spans: &[Span], theme: &Theme, mode: ColorMode) -> String {
         }
         let color = match s.role {
             Role::Text => theme.text,
-            Role::Heading => theme.purple_soft,
-            Role::Marker => theme.pink,
-            Role::Code => theme.pink_soft,
-            Role::Link => theme.purple,
-            Role::Muted => theme.dim,
+            Role::Heading | Role::Marker | Role::Link => theme.rose,
+            Role::Code | Role::Muted => theme.text,
         };
         out.push_str(&foreground(color, mode));
         out.push_str(&s.text);
