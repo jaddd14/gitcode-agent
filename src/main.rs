@@ -414,6 +414,17 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     system.push('\n');
     system.push_str(&memory.text);
+    let skill_home = home.clone();
+    let skill_root = root.clone();
+    let skill_index = tokio::task::spawn_blocking(move || {
+        gitcode::extensibility::discover_skills(&skill_home, &skill_root)
+            .map(|skills| gitcode::extensibility::format_skill_index(&skills))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    system.push('\n');
+    system.push_str(&skill_index);
     let mut agent = Agent {
         client,
         tools,

@@ -38,6 +38,12 @@ Minimal Anthropic thinking replay now preserves text and concatenated signature 
 - Release build and `gitcode --version` passed locally (`fast-release-build.log`, `fast-repo-gate.log`). Workflow YAML was parsed locally. Community templates, pinned toolchain, dependency policy and source-verifying staging workflow are present.
 - TodoWrite is now registered in native model tools and connected to the existing validated task-list implementation; deep child-agent runtime remains deferred.
 
+## Latest speed-first checkpoint
+
+- M9/M10 intermediate: TodoWrite and Skill are registered in the tool executor; skill summaries enter the prompt, full skill bodies load on demand, and custom TUI slash templates expand through confined file inclusion. Unsupported per-command tool/model overrides fail closed. Existing agency/extensibility regressions remain green; real child loops, hooks and interactive questions remain deferred.
+- M14 intermediate: WebFetch is registered with explicit network permission, parsed URL domain enforcement, bounded streaming reads and untrusted wrapping. Search backends and local git wrapper have mock tests; full interactive git commands remain deferred.
+- Published commit `3160799` has successful CI 42459578361, Security 42459578398 and staging Deploy 42459578362. This is an actual verified staging build/smoke deployment, not a running hosted service.
+
 ## Known gaps
 
 Speed-first deferrals (2026-11-08): advanced provider registry/auth/hot reload, encrypted reasoning replay and request options; Kitty negotiation; editing move-mode preservation and automatic rewind UI; interactive approval UI and OS sandbox; session picker, semantic compaction/output spilling and crash-consistent interrupted-turn persistence. Deep subagents, MCP, hooks, web and git integration are deferred until after intermediate publication. These are known limitations, not implemented parity.

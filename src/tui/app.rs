@@ -236,8 +236,43 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 exit_armed = true;
                 renderer.finalize("Для выхода нажмите Ctrl+C ещё раз; Ctrl+D — выход.")?;
             }
-            Action::Submit(prompt) => {
+            Action::Submit(mut prompt) => {
                 exit_armed = false;
+                if let Some(command) = prompt.strip_prefix('/') {
+                    let (name, args) = command
+                        .split_once(char::is_whitespace)
+                        .unwrap_or((command, ""));
+                    if !matches!(name, "exit" | "help" | "usage" | "cost") {
+                        let home = std::env::var_os("HOME")
+                            .map(std::path::PathBuf::from)
+                            .ok_or_else(|| io::Error::other("HOME is required"))?;
+                        let root = agent.tools.permissions.root.clone();
+                        let name = name.to_owned();
+                        let args = args.to_owned();
+                        let expanded = tokio::task::spawn_blocking(move || {
+                            let commands =
+                                crate::extensibility::load_custom_commands(&home, &root)?;
+                            commands
+                                .iter()
+                                .find(|command| command.name == name)
+                                .map(|command| {
+                                    if !command.allowed_tools.is_empty() || command.model.is_some()
+                                    {
+                                        return Err(io::Error::other(
+                                            "custom command tool/model overrides are not supported",
+                                        ));
+                                    }
+                                    command.render(&args, &root)
+                                })
+                                .transpose()
+                        })
+                        .await
+                        .map_err(io::Error::other)??;
+                        if let Some(expanded) = expanded {
+                            prompt = expanded;
+                        }
+                    }
+                }
                 if prompt.trim() == "/exit" {
                     return Ok(());
                 }

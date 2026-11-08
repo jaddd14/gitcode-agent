@@ -44,7 +44,16 @@ impl DomainPolicy {
 
     /// Check whether a URL is permitted by the domain allow/block policy.
     pub fn is_allowed_url(&self, url: &str) -> bool {
-        let Some(host) = Self::extract_host(url) else {
+        let Ok(parsed) = reqwest::Url::parse(url) else {
+            return false;
+        };
+        if !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return false;
+        }
+        let Some(host) = parsed.host_str() else {
             return false;
         };
         if self.blocked.iter().any(|b| Self::matches_domain(host, b)) {
@@ -184,7 +193,18 @@ impl WebFetcher {
         if !resp.status().is_success() {
             return Err(format!("WebFetch HTTP {}", resp.status().as_u16()));
         }
-        let mut text = resp.text().await.map_err(|_| "cannot read WebFetch body")?;
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| "cannot read WebFetch body")?;
+            let remaining = MAX_WEB_BYTES.saturating_sub(bytes.len());
+            bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            if bytes.len() >= MAX_WEB_BYTES {
+                break;
+            }
+        }
+        let mut text = String::from_utf8_lossy(&bytes).into_owned();
         if text.len() > MAX_WEB_BYTES {
             let mut end = MAX_WEB_BYTES;
             while !text.is_char_boundary(end) {

@@ -47,6 +47,8 @@ impl Tools {
     /// Stable tool schemas used by all provider adapters.
     pub fn definitions() -> Vec<Tool> {
         vec![
+            tool("WebFetch", "Fetch an explicitly authorized HTTP URL as untrusted text; network permission is required.", json!({"url":{"type":"string"}}), &["url"]),
+            tool("Skill", "Load an installed skill by its registered name; its content does not override permission policy.", json!({"name":{"type":"string"}}), &["name"]),
             tool("TodoWrite", "Replace the task list with current progress.", json!({"todos":{"type":"array","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]},"activeForm":{"type":"string"}},"required":["content","status"]}}}), &["todos"]),
             tool("Write", "Atomically write workspace text. Existing files must be read first; approval is required.", json!({"path":{"type":"string"},"content":{"type":"string"}}), &["path","content"]),
             tool("Edit", "Replace exact unique text in a previously read file.", json!({"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}}), &["path","old_string","new_string"]),
@@ -111,6 +113,40 @@ impl Tools {
     pub async fn execute(&mut self, name: &str, input: &Value) -> Result<String, String> {
         match name {
             "TodoWrite" => return self.todos.update_from_value(input),
+            "WebFetch" => {
+                let url = required(input, "url")?;
+                if self.permissions.decide("WebFetch", url, true) != Decision::Allow {
+                    return Err("network permission denied or requires approval".into());
+                }
+                return crate::web_git::WebFetcher::new(
+                    crate::web_git::DomainPolicy::default(),
+                    Duration::from_secs(900),
+                )?
+                .fetch(url)
+                .await;
+            }
+            "Skill" => {
+                let name = required(input, "name")?.to_owned();
+                let home = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .ok_or("HOME is required")?;
+                let root = self.permissions.root.clone();
+                if self.permissions.decide("Skill", &name, false) != Decision::Allow {
+                    return Err("skill permission denied or requires approval".into());
+                }
+                return tokio::task::spawn_blocking(move || {
+                    let skills = crate::extensibility::discover_skills(&home, &root)
+                        .map_err(|e| e.to_string())?;
+                    let skill = skills
+                        .iter()
+                        .find(|skill| skill.name == name)
+                        .ok_or("unknown skill")?;
+                    crate::extensibility::load_skill_body(skill).map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+                .map(bound);
+            }
             "Bash" => {
                 let command = required(input, "command")?;
                 let secs = input["timeout_seconds"]

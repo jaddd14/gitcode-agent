@@ -16,6 +16,18 @@ async fn read_search_and_deny_rules() {
     assert!(Tools::definitions()
         .iter()
         .any(|tool| tool.name == "TodoWrite"));
+    assert!(Tools::definitions().iter().any(|tool| tool.name == "Skill"));
+    std::fs::create_dir_all(root.join(".gitcode/skills/fixture")).unwrap();
+    std::fs::write(
+        root.join(".gitcode/skills/fixture/SKILL.md"),
+        "---\nname: fixture\ndescription: Test fixture\n---\nVerify workspace facts with Read.",
+    )
+    .unwrap();
+    assert!(tools
+        .execute("Skill", &json!({"name":"fixture"}))
+        .await
+        .unwrap()
+        .contains("Verify workspace facts"));
     assert!(tools.execute("TodoWrite", &json!({"todos":[{"content":"Verify workspace","status":"in_progress","activeForm":"Verifying workspace"}]})).await.is_ok());
     assert!(tools
         .execute("Read", &json!({"path":"src/a.rs","offset":2,"limit":1}))

@@ -15,6 +15,13 @@ use web_git::{
 
 #[tokio::test]
 async fn webfetch_markdown_redirects_search_and_git_repo_work() {
+    let policy = DomainPolicy {
+        allowed: BTreeSet::from(["example.com".into()]),
+        blocked: BTreeSet::new(),
+    };
+    assert!(policy.is_allowed_url("https://example.com/path"));
+    assert!(!policy.is_allowed_url("https://example.com@evil.invalid/path"));
+    assert!(!policy.is_allowed_url("file:///etc/passwd"));
     let html = "<html><head><script>alert(1)</script></head><body><h1>Title</h1><p>Hello <code>world</code> &amp; friends</p></body></html>";
     let md = html_to_markdown(html);
     assert!(md.contains("# Title"));
