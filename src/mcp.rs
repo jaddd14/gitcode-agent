@@ -10,10 +10,7 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::Command,
-};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// Maximum output bytes returned from an MCP tool or resource call before truncation.
 pub const MAX_MCP_OUTPUT_BYTES: usize = 100_000;
@@ -204,9 +201,8 @@ impl StdioMcpClient {
     /// Perform an `initialize` + request roundtrip against the stdio MCP process.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         let work = async {
-            let mut cmd = Command::new(&self.command);
-            cmd.args(&self.args)
-                .envs(&self.env)
+            let mut cmd = crate::platform::mcp_command(&self.command, &self.args)?;
+            cmd.envs(&self.env)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())

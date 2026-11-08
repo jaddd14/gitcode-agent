@@ -29,6 +29,7 @@ pub struct Tools {
     /// Monotonic counter for background shell job identifiers.
     next_job_id: u64,
     todos: crate::agent::agency::TodoList,
+    shell_selection: String,
 }
 
 impl Tools {
@@ -41,7 +42,21 @@ impl Tools {
             jobs: BTreeMap::new(),
             next_job_id: 1,
             todos: crate::agent::agency::TodoList::new(),
+            shell_selection: "auto".into(),
         }
+    }
+
+    /// Create a tool executor with an explicitly validated native shell selection.
+    pub fn with_shell(permissions: Engine, selection: &str) -> Result<Self, String> {
+        crate::platform::detect_shell(selection)?;
+        let mut tools = Self::new(permissions);
+        tools.shell_selection = selection.into();
+        Ok(tools)
+    }
+
+    /// Active interpreter information for system prompts and tool descriptions.
+    pub fn shell(&self) -> Result<crate::platform::Shell, String> {
+        crate::platform::detect_shell(&self.shell_selection)
     }
 
     /// Stable tool schemas used by all provider adapters.
@@ -105,7 +120,11 @@ impl Tools {
         if let Some(session) = &self.shell_session {
             return Ok(session.clone());
         }
-        let session = shell::Session::new(&self.permissions, &self.permissions.root)?;
+        let session = shell::Session::with_shell(
+            &self.permissions,
+            &self.permissions.root,
+            &self.shell_selection,
+        )?;
         self.shell_session = Some(session.clone());
         Ok(session)
     }
@@ -199,8 +218,11 @@ impl Tools {
                     .clamp(1, 600);
                 let timeout = Duration::from_secs(secs);
                 if input["run_in_background"].as_bool().unwrap_or(false) {
-                    let bg_session =
-                        shell::Session::new(&self.permissions, &self.permissions.root)?;
+                    let bg_session = shell::Session::with_shell(
+                        &self.permissions,
+                        &self.permissions.root,
+                        &self.shell_selection,
+                    )?;
                     let job = bg_session
                         .background(&self.permissions, command, timeout)
                         .await?;

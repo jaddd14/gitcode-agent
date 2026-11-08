@@ -21,7 +21,7 @@ use gitcode::{
 use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf, time::Duration};
 
 #[derive(Parser)]
-#[command(name = "gitcode", version, about = "Local-first terminal coding agent")]
+#[command(name = "gitcode", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GITCODE_COMMIT"), ")"), about = "Local-first terminal coding agent")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -63,6 +63,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install a checksum-verified release update.
+    Update,
     /// Execute a single non-interactive prompt (Codex CLI style).
     Exec {
         /// Prompt string to execute.
@@ -110,9 +112,12 @@ async fn main() {
 async fn logged_run() -> Result<(), String> {
     // Parse first so help/version never create application state.
     let cli = Cli::parse();
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or("не задан HOME")?;
+    gitcode::update::cleanup_old();
+    if matches!(&cli.command, Some(Commands::Update)) {
+        return gitcode::update::run().await;
+    }
+    let home = gitcode::platform::home_dir()
+        .ok_or("не удалось определить домашний каталог (HOME или USERPROFILE)")?;
     let mut logger = tokio::task::spawn_blocking(move || {
         let directory = home.join(".gitcode");
         std::fs::create_dir_all(&directory).map_err(|_| "не удалось создать каталог журнала")?;
@@ -164,9 +169,8 @@ async fn logged_run() -> Result<(), String> {
 
 async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|_| "не удалось определить рабочий каталог")?;
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or("не задан HOME")?;
+    let home = gitcode::platform::home_dir()
+        .ok_or("не удалось определить домашний каталог (HOME или USERPROFILE)")?;
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let mut overrides = Overrides::new();
     if let Some(model) = cli.model.clone() {
@@ -288,6 +292,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                 }
                 return Ok(());
             }
+            Commands::Update => return gitcode::update::run().await,
             Commands::Exec { .. } => {}
         }
     }
@@ -366,8 +371,14 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
     } else {
         Mode::Default
     };
-    let tools = Tools::new(Engine::new(&root, mode)?);
+    let tools = Tools::with_shell(Engine::new(&root, mode)?, &config.shell)?;
+    let shell = tools.shell()?;
     let mut system = cli.system_prompt.unwrap_or_else(|| BASE_PROMPT.into());
+    system.push_str(&format!(
+        "\nExecution shell: {}. {}",
+        shell.name(),
+        shell.description()
+    ));
     if let Some(append) = cli.append_system_prompt {
         system.push('\n');
         system.push_str(&append);

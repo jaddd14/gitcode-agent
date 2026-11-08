@@ -66,6 +66,8 @@ pub struct Config {
     pub intro: bool,
     /// Persisted terminal palette and white-text preference.
     pub theme: crate::theme::ThemeChoice,
+    /// Shell selection: auto, bash, pwsh, powershell, or cmd.
+    pub shell: String,
 }
 
 impl Default for Config {
@@ -78,6 +80,7 @@ impl Default for Config {
             compaction_threshold: 0.9,
             intro: true,
             theme: crate::theme::ThemeChoice::default(),
+            shell: "auto".into(),
         }
     }
 }
@@ -100,6 +103,14 @@ impl Config {
                 "must be ru or en",
             ),
             ("model", !self.model.trim().is_empty(), "must not be empty"),
+            (
+                "shell",
+                matches!(
+                    self.shell.as_str(),
+                    "auto" | "bash" | "pwsh" | "powershell" | "cmd"
+                ),
+                "must be auto, bash, pwsh, powershell, or cmd",
+            ),
             ("max_turns", self.max_turns > 0, "must be positive"),
             (
                 "compaction_threshold",
@@ -158,7 +169,11 @@ pub fn load(
             Err(e) => return Err(io("read configuration", path, e)),
         }
     }
-    for (name, key) in [("GITCODE_LANGUAGE", "language"), ("GITCODE_MODEL", "model")] {
+    for (name, key) in [
+        ("GITCODE_LANGUAGE", "language"),
+        ("GITCODE_MODEL", "model"),
+        ("GITCODE_SHELL", "shell"),
+    ] {
         if let Some(v) = env.get(name) {
             set(&mut value, key, toml::Value::String(v.clone()))?;
         }
@@ -296,7 +311,9 @@ pub fn save_theme(home: &Path, choice: crate::theme::ThemeChoice) -> Result<()> 
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&temporary, &path)?;
-        std::fs::File::open(&directory)?.sync_all()
+        #[cfg(unix)]
+        std::fs::File::open(&directory)?.sync_all()?;
+        Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);

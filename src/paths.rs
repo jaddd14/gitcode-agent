@@ -39,7 +39,7 @@ pub fn confined_existing(path: &Path, root: &Path) -> Result<bool> {
     let root = root
         .canonicalize()
         .map_err(|e| io("canonicalize", root, e))?;
-    Ok(canonical.starts_with(root))
+    Ok(crate::platform::path_within(&canonical, &root))
 }
 
 #[cfg(test)]

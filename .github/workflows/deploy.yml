@@ -38,18 +38,49 @@ jobs:
       - run: cargo build --release --locked
       - name: Smoke tests
         run: |
-          ./target/release/gitcode --version
-          ./target/release/gitcode doctor --json
+          smoke_home=$(mktemp -d)
+          HOME="$smoke_home" ./target/release/gitcode --version
+          HOME="$smoke_home" ./target/release/gitcode doctor --json
           cargo test --test foundations --locked
       - run: tar -czf gitcode-staging-linux-x86_64.tar.gz -C target/release gitcode
       - uses: actions/upload-artifact@v4
         with:
           name: staging-linux-x86_64
           path: gitcode-staging-linux-x86_64.tar.gz
-  binaries:
+          if-no-files-found: error
+  verify-release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: staging
     strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Strict release quality gate
+        run: bash scripts/check.sh
+      - run: cargo +1.99.0 build --release --locked
+      - name: Native installer smoke (local HTTP, never an existing public release)
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python -I scripts/installer-smoke.py --binary target/release/gitcode.exe
+          else
+            python -I scripts/installer-smoke.py --binary target/release/gitcode
+          fi
+  binaries:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [staging, verify-release]
+    strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -58,23 +89,53 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: rustup toolchain install 1.99.0 --profile minimal --target ${{ matrix.target }}
-      - run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Package executable
+      - run: cargo +1.99.0 build --release --locked --target ${{ matrix.target }}
+      - name: Package executable, license and README
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
         run: |
-          mkdir -p dist
-          tar -czf dist/gitcode-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release gitcode
+          python -I - <<'PY'
+          import os, pathlib, tarfile, zipfile
+          target = os.environ['RELEASE_TARGET']
+          windows = 'windows' in target
+          dist = pathlib.Path('dist')
+          dist.mkdir()
+          executable = 'gitcode.exe' if windows else 'gitcode'
+          files = [(pathlib.Path('target') / target / 'release' / executable, executable),
+                   (pathlib.Path('LICENSE'), 'LICENSE'), (pathlib.Path('README.md'), 'README.md')]
+          stem = dist / ('gitcode-' + os.environ['GITHUB_REF_NAME'] + '-' + target)
+          if windows:
+              with zipfile.ZipFile(str(stem) + '.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+                  for source, name in files:
+                      archive.write(source, name)
+          else:
+              with tarfile.open(str(stem) + '.tar.gz', 'w:gz') as archive:
+                  for source, name in files:
+                      archive.add(source, arcname=name)
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: dist/*
+          if-no-files-found: error
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [staging, binaries]
+    needs: [staging, verify-release, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -89,12 +150,40 @@ jobs:
           pattern: binary-*
           path: dist
           merge-multiple: true
+      - name: Render installers
+        run: sh scripts/render-installers.sh dist
+      - name: Generate manifest, checksums and release notes
+        run: |
+          python3 -I - <<'PY'
+          import datetime, hashlib, json, os, pathlib, re, tomllib
+          dist = pathlib.Path('dist')
+          tag = os.environ['GITHUB_REF_NAME']
+          version = tag.removeprefix('v')
+          assert re.fullmatch(r'[0-9][0-9A-Za-z.+-]*', version), 'Invalid version tag'
+          assert tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version'] == version, 'Tag and Cargo version differ'
+          targets = ('x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
+                     'x86_64-apple-darwin', 'aarch64-apple-darwin', 'x86_64-pc-windows-msvc')
+          manifest = {'version': version, 'date': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'platforms': {}}
+          base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}"
+          expected = {'install.sh', 'install.ps1'}
+          for target in targets:
+              name = f"gitcode-{tag}-{target}" + ('.zip' if 'windows' in target else '.tar.gz')
+              path = dist / name
+              assert path.is_file() and path.stat().st_size > 0, f'Missing archive: {name}'
+              expected.add(name)
+              manifest['platforms'][target] = {'url': base + '/' + name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+          assert {path.name for path in dist.iterdir()} == expected, 'Unexpected release asset set'
+          (dist / 'latest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          assets = sorted(path for path in dist.iterdir() if path.is_file())
+          (dist / 'SHA256SUMS').write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n' for path in assets))
+          text = pathlib.Path('CHANGELOG.md').read_text()
+          match = re.search(r'^## \[' + re.escape(version) + r'\].*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
+          assert match, 'Missing changelog section'
+          pathlib.Path('release-notes.md').write_text(match.group(1).strip() + '\n')
+          PY
+          (cd dist && sha256sum --check SHA256SUMS)
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd dist
-          sha256sum *.tar.gz > SHA256SUMS
-          cd ..
-          python3 -c 'import pathlib,re,sys; text=pathlib.Path("CHANGELOG.md").read_text(); version=sys.argv[1].removeprefix("v"); match=re.search(r"^## \["+re.escape(version)+r"\].*\n(.*?)(?=^## |\Z)",text,re.M|re.S); assert match,"Missing changelog section"; pathlib.Path("release-notes.md").write_text(match.group(1).strip()+"\n")' "$GITHUB_REF_NAME"
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --verify-tag --title "gitcode ${GITHUB_REF_NAME#v}" --notes-file release-notes.md --latest
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "gitcode ${GITHUB_REF_NAME#v}" --notes-file release-notes.md --latest

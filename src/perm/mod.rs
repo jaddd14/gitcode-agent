@@ -64,7 +64,22 @@ impl Rule {
     }
     fn matches(&self, tool: &str, resource: &str) -> bool {
         (self.tool == tool || self.tool == "*")
-            && globset::Glob::new(&self.pattern)
+            && globset::GlobBuilder::new(&self.pattern)
+                .case_insensitive(
+                    cfg!(windows)
+                        && matches!(
+                            tool,
+                            "Read"
+                                | "Write"
+                                | "Edit"
+                                | "MultiEdit"
+                                | "NotebookEdit"
+                                | "LS"
+                                | "apply_patch"
+                        ),
+                )
+                .backslash_escape(!cfg!(windows) || tool == "Bash")
+                .build()
                 .is_ok_and(|g| g.compile_matcher().is_match(resource))
     }
 }
@@ -130,6 +145,8 @@ impl Engine {
 
     /// Resolve an existing resource and reject symlink escapes from workspace.
     pub fn existing(&self, path: &Path) -> Result<PathBuf, String> {
+        #[cfg(windows)]
+        crate::platform::validate_windows_path(path)?;
         let path = if path.is_absolute() {
             path.to_owned()
         } else {
@@ -138,7 +155,7 @@ impl Engine {
         let canonical = path
             .canonicalize()
             .map_err(|_| "cannot resolve tool path")?;
-        if !canonical.starts_with(&self.root) {
+        if !crate::platform::path_within(&canonical, &self.root) {
             return Err("path is outside the workspace boundary".into());
         }
         Ok(canonical)

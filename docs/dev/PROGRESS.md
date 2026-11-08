@@ -2,6 +2,16 @@
 
 ## Current state
 
+### M19 validation checkpoint (2026-11-08)
+
+- Native Windows port remains in progress in `feat/windows`; no Windows release readiness is claimed.
+- Linux focused platform/shell/updater tests passed: 16 tests. Installer security fixtures passed: 11 tests.
+- Local Windows cross-check could not reach project code: `ring` requires the unavailable `x86_64-w64-mingw32-gcc`. Native Windows CI remains mandatory.
+- Shared full format/Clippy/test gate is being rerun after doctor and isolated subprocess environment integration. Earlier attempts failed on test Clippy diagnostics and an intermediate missing helper; they are not green evidence.
+- Custom install endpoint `https://api.samp.team/gitcode/latest.json` returned HTTP 404. The domain installer must not be advertised as live.
+- Windows and deployment instructions are drafted; CI, installer smoke, Security, merge and v0.3.0 publication are still pending. The stable copy and human configuration are untouched during M19.
+
+
 Speed-first delivery policy accepted on 2026-11-08: at most 40 minutes per milestone, no independent audits of green milestones, and unresolved depth recorded under Known gaps. M0 and M1 are closed for the intermediate delivery; this is not a full-parity claim. M2 is receiving only minimal signed-thinking replay before proceeding toward a working M8. Intermediate publication is authorized after a green M8, with the original credential and secret-scan rules unchanged. See [the historical compliance audit](COMPLIANCE-AUDIT.md). Task specification, credentials, and machine-readable recovery state remain outside this repository.
 
 The A1.3 resume routine was exercised again: read external state and development records, inspected status/history/tags/tmux logs, and preserved existing work. Cargo metadata confirms one standalone package; no explicit workspace is declared. M4–M8 share one historical commit and need separate checked completion commits before retagging. Foundation integration (M1), then provider acceptance (M2/M3), precede further publication work. README now distinguishes runtime features from helpers and removes unsupported performance/parity claims. The fresh stable-tree quality gate passed: formatting, all-target Clippy with warnings denied, and 138 tests (`audit-stable-gate.log`, exit 0). This includes executable saved-key HTTP authentication and reflected-error redaction, retry/lifecycle regressions, agent request boundaries, and non-starving redraw/cumulative live-usage regressions. No current milestone completion tag has been moved.

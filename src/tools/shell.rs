@@ -157,8 +157,100 @@ fn validate_simple(part: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn authorize(engine: &Engine, command: &str) -> Result<(), String> {
-    let parts = split_commands(command)?;
+/// Conservatively split native dialects without treating Windows path slashes as escapes.
+pub fn split_native_commands(
+    command: &str,
+    kind: crate::platform::ShellKind,
+) -> Result<Vec<String>, String> {
+    use crate::platform::ShellKind;
+    if kind == ShellKind::Bash {
+        return split_commands(command);
+    }
+    if command.is_empty() || command.len() > 32_768 {
+        return Err("empty or oversized command".into());
+    }
+    let powershell = matches!(kind, ShellKind::Pwsh | ShellKind::PowerShell);
+    let mut quote = None;
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (index, ch) in command.char_indices() {
+        if ch.is_control() {
+            return Err("control characters are unsupported".into());
+        }
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            }
+            if active == '"'
+                && ((powershell && matches!(ch, '$' | '`'))
+                    || (!powershell && matches!(ch, '%' | '!')))
+            {
+                return Err("quoted expansion is unsupported".into());
+            }
+            continue;
+        }
+        if ch == '"' || powershell && ch == '\'' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch == ';' && powershell {
+            parts.push(command[start..index].trim().to_owned());
+            start = index + 1;
+            continue;
+        }
+        if matches!(
+            ch,
+            '&' | '|' | '<' | '>' | '(' | ')' | '{' | '}' | '`' | '^' | '*' | '?' | '#' | '%' | '!'
+        ) {
+            return Err("complex native shell syntax is unsupported".into());
+        }
+    }
+    if quote.is_some() {
+        return Err("unterminated quote".into());
+    }
+    parts.push(command[start..].trim().to_owned());
+    for part in &parts {
+        let first = part.split_whitespace().next().unwrap_or("");
+        let env_assignment = powershell && first.starts_with("$env:") && part.contains('=');
+        if first.is_empty()
+            || (!env_assignment
+                && !first
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_./\\:-".contains(c)))
+        {
+            return Err("executable must be a literal name".into());
+        }
+        if matches!(
+            first.to_ascii_lowercase().as_str(),
+            "exit"
+                | "return"
+                | "throw"
+                | "trap"
+                | "function"
+                | "if"
+                | "for"
+                | "foreach"
+                | "while"
+                | "do"
+                | "invoke-expression"
+                | "iex"
+                | "set-alias"
+                | "new-alias"
+                | "remove-item"
+        ) {
+            // These can alter interpreter framing or bypass per-command classification.
+            return Err("native control syntax is unsupported".into());
+        }
+    }
+    Ok(parts)
+}
+
+fn authorize(engine: &Engine, command: &str, shell: &crate::platform::Shell) -> Result<(), String> {
+    let parts = if shell.kind == crate::platform::ShellKind::Bash {
+        split_commands(command)?
+    } else {
+        split_native_commands(command, shell.kind)?
+    };
     // Check explicit whole-command deny/ask rules as well as component rules.
     let mut whole = engine.clone();
     if whole.mode != Mode::Bypass {
@@ -218,10 +310,17 @@ pub struct Session {
     root: PathBuf,
     home: PathBuf,
     process: Arc<tokio::sync::Mutex<Option<Process>>>,
+    shell: crate::platform::Shell,
 }
 impl Session {
     /// Create a lazy session rooted at the engine workspace, with an explicit child HOME.
     pub fn new(engine: &Engine, home: &Path) -> Result<Self, String> {
+        Self::with_shell(engine, home, "auto")
+    }
+
+    /// Create a session using auto, bash, pwsh, powershell, or cmd selection.
+    pub fn with_shell(engine: &Engine, home: &Path, selection: &str) -> Result<Self, String> {
+        let shell = crate::platform::detect_shell(selection)?;
         let home = home
             .canonicalize()
             .map_err(|_| "cannot resolve shell HOME")?;
@@ -232,6 +331,7 @@ impl Session {
             root: engine.root.clone(),
             home,
             process: Arc::new(tokio::sync::Mutex::new(None)),
+            shell,
         })
     }
 
@@ -290,7 +390,7 @@ impl Session {
         if engine.root != self.root {
             return Err("session workspace does not match permission engine".into());
         }
-        authorize(engine, command)
+        authorize(engine, command, &self.shell)
     }
 
     async fn run(
@@ -305,13 +405,11 @@ impl Session {
             let mut slot = self.process.lock().await;
             let mut process = match slot.take() {
                 Some(process) => process,
-                None => Process::spawn(&self.root, &self.home)?,
+                None => Process::spawn(&self.root, &self.home, &self.shell)?,
             };
             let id = SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let marker = format!("\x1eM7{id}:").into_bytes();
-            let script = format!(
-                "{{ {command}\n}} </dev/null\nbuiltin printf '\\036M7{id}:%s\\037' \"$?\"\n"
-            );
+            let script = self.shell.script(command, id);
             process
                 .input
                 .write_all(script.as_bytes())
@@ -432,11 +530,18 @@ impl Drop for Job {
 struct Process {
     child: Child,
     input: ChildStdin,
+    #[cfg(unix)]
     output: tokio::net::UnixStream,
+    #[cfg(windows)]
+    output: tokio::io::DuplexStream,
+    #[cfg(unix)]
     group: u32,
+    #[cfg(windows)]
+    _tree: crate::platform::ProcessTree,
 }
 impl Process {
-    fn spawn(root: &Path, home: &Path) -> Result<Self, String> {
+    #[cfg(unix)]
+    fn spawn(root: &Path, home: &Path, shell: &crate::platform::Shell) -> Result<Self, String> {
         let (reader, writer) =
             std::os::unix::net::UnixStream::pair().map_err(|_| "cannot create output socket")?;
         reader
@@ -445,7 +550,7 @@ impl Process {
         let stderr = writer
             .try_clone()
             .map_err(|_| "cannot merge shell output")?;
-        let mut command = Command::new("/bin/bash");
+        let mut command = Command::new(&shell.executable);
         command
             .args(["--noprofile", "--norc"])
             .current_dir(root)
@@ -476,9 +581,72 @@ impl Process {
         })
     }
 }
+#[cfg(windows)]
+impl Process {
+    fn spawn(root: &Path, home: &Path, shell: &crate::platform::Shell) -> Result<Self, String> {
+        use crate::platform::ShellKind;
+        use std::io::Read;
+        let (mut reader, writer) = os_pipe::pipe().map_err(|_| "cannot create shell pipe")?;
+        let stderr = writer
+            .try_clone()
+            .map_err(|_| "cannot merge shell output")?;
+        let mut command = Command::new(&shell.executable);
+        match shell.kind {
+            ShellKind::Bash => {
+                command.args(["--noprofile", "--norc"]);
+            }
+            ShellKind::Pwsh | ShellKind::PowerShell => {
+                command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"]);
+            }
+            ShellKind::Cmd => {
+                command.args(["/D", "/Q", "/K"]);
+            }
+        }
+        command
+            .current_dir(root)
+            .env("HOME", home)
+            .env("USERPROFILE", home)
+            .env("TERM", "dumb")
+            .env("CI", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_PAGER", "cat")
+            .env("PAGER", "cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::from(writer))
+            .stderr(Stdio::from(stderr))
+            .kill_on_drop(true);
+        let mut child = command.spawn().map_err(|_| "cannot start native shell")?;
+        drop(command);
+        let tree = crate::platform::ProcessTree::attach(&child)?;
+        let input = child.stdin.take().ok_or("shell stdin unavailable")?;
+        let (output, mut sink) = tokio::io::duplex(65536);
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let mut chunk = [0; 8192];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        if runtime.block_on(sink.write_all(&chunk[..count])).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            input,
+            output,
+            _tree: tree,
+        })
+    }
+}
+
 impl Drop for Process {
     fn drop(&mut self) {
         // group comes only from our own unreaped child created with process_group(0).
+        #[cfg(unix)]
         let _ = std::process::Command::new("/bin/kill")
             .args(["-KILL", "--", &format!("-{}", self.group)])
             .stdin(Stdio::null())

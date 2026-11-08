@@ -22,6 +22,7 @@ pub trait TerminalBackend: Send + Sync {
 struct SystemTerminal;
 impl TerminalBackend for SystemTerminal {
     fn raw(&self) -> io::Result<()> {
+        crate::platform::prepare_terminal()?;
         crossterm::terminal::enable_raw_mode()
     }
     fn cooked(&self) -> io::Result<()> {
@@ -98,6 +99,7 @@ impl TerminalGuard {
             active: AtomicBool::new(true),
         });
         register(&state);
+        #[allow(unused_mut)]
         let mut guard = Self {
             state,
             #[cfg(unix)]

@@ -136,6 +136,8 @@ fn boolean(input: &Value, key: &str) -> Result<bool, String> {
 
 fn resolve(engine: &Engine, tool: &str, raw: &str) -> Result<PathBuf, String> {
     let requested = Path::new(raw);
+    #[cfg(windows)]
+    crate::platform::validate_windows_path(requested)?;
     if raw.is_empty()
         || requested
             .components()
@@ -173,7 +175,7 @@ fn resolve(engine: &Engine, tool: &str, raw: &str) -> Result<PathBuf, String> {
     for part in missing.into_iter().rev() {
         path.push(part);
     }
-    if !path.starts_with(&engine.root) || path == engine.root {
+    if !crate::platform::path_within(&path, &engine.root) || path == engine.root {
         return Err("path is outside workspace or is workspace root".into());
     }
     let relative = path

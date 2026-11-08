@@ -110,9 +110,7 @@ pub fn popup(text: &str, selected: usize, width: usize, capacity: usize) -> Vec<
 }
 
 fn home_dir(fallback: &Path) -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| fallback.to_path_buf())
+    crate::platform::home_dir().unwrap_or_else(|| fallback.to_path_buf())
 }
 
 fn mode_label(mode: Mode) -> &'static str {

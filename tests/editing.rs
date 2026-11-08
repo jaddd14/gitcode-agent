@@ -3,6 +3,9 @@
 
 #[path = "../src/tools/editing.rs"]
 mod editing;
+mod platform {
+    pub use gitcode::platform::*;
+}
 mod perm {
     pub use gitcode::perm::*;
 }

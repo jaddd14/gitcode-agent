@@ -8,6 +8,9 @@ mod shell;
 mod perm {
     pub use gitcode::perm::*;
 }
+mod platform {
+    pub use gitcode::platform::*;
+}
 
 use perm::{Engine, Mode, Rule};
 use shell::{Session, MAX_TIMEOUT, OUTPUT_LIMIT};

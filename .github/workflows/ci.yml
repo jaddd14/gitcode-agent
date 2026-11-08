@@ -11,14 +11,23 @@ env:
   RUST_BACKTRACE: '1'
   CARGO_TERM_COLOR: always
 jobs:
-  check:
+  test:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/gitcode-target
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install declared toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - uses: actions/cache@v4
@@ -26,13 +35,66 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ci-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      - name: Quality gate
+            ${{ runner.temp }}/gitcode-target
+          key: ci-${{ runner.os }}-${{ runner.arch }}-1.99.0-${{ hashFiles('Cargo.lock') }}
+      - name: Quality gate (format, clippy, all tests including native shell and mock integrations)
         run: bash scripts/check.sh
+      - name: Headless CLI against local mock provider
+        run: cargo test --locked --test foundations executable_authenticates_with_saved_key_and_hides_reflected_errors -- --exact
       - name: Build with declared minimum Rust
         run: cargo +1.99.0 build --release --locked
+      - name: Native executable version and doctor
+        run: |
+          python -I - <<'PY'
+          import json, os, pathlib, subprocess, tempfile
+          binary = pathlib.Path(os.environ['CARGO_TARGET_DIR']) / 'release' / ('gitcode.exe' if os.name == 'nt' else 'gitcode')
+          with tempfile.TemporaryDirectory(prefix='gitcode-cli-smoke-') as root:
+              env = {key: value for key, value in os.environ.items() if not key.startswith(('GITCODE_', 'ANTHROPIC_', 'OPENAI_'))}
+              env.update(HOME=root, USERPROFILE=root, LOCALAPPDATA=str(pathlib.Path(root) / 'local'))
+              subprocess.run([str(binary), '--version'], cwd=root, env=env, check=True)
+              output = subprocess.check_output([str(binary), 'doctor', '--json'], cwd=root, env=env)
+              report = json.loads(output)
+              assert isinstance(report.get('checks'), list), report
+              print(json.dumps(report, ensure_ascii=False))
+          PY
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-binary-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            ${{ runner.temp }}/gitcode-target/release/gitcode
+            ${{ runner.temp }}/gitcode-target/release/gitcode.exe
+          if-no-files-found: error
+          retention-days: 2
+  installer-smoke:
+    name: Installer smoke (${{ matrix.os }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-binary-${{ runner.os }}-${{ runner.arch }}
+          path: smoke-bin
+      - name: Test native installers against local HTTP release fixtures
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python -I scripts/installer-smoke.py --binary smoke-bin/gitcode.exe
+          else
+            chmod +x smoke-bin/gitcode
+            python -I scripts/installer-smoke.py --binary smoke-bin/gitcode
+          fi

@@ -37,6 +37,24 @@ A local-first terminal coding agent under development in a single Rust Cargo pac
 
 *Design illustration, not a captured application screenshot. Some illustrated functionality remains unintegrated.*
 
+## Windows port and installers (pending validation)
+
+The native Windows port and per-user installers are being validated on `feat/windows`. Windows support is not a published feature until native Windows CI and installer smoke jobs pass. See [Windows requirements and limitations](docs/windows.md) and [static installer deployment](docs/dev/DEPLOY-INSTALLER.md).
+
+The custom-domain installer endpoint is not live (manifest check returned HTTP 404). Once a release containing these scripts is verified and merged, the GitHub-hosted installation paths are:
+
+```bash
+export GITCODE_BASE_URL=https://github.com/jaddd14/gitcode-agent/releases/latest/download
+curl -fsSL https://raw.githubusercontent.com/jaddd14/gitcode-agent/main/scripts/install.sh | bash
+```
+
+```powershell
+$env:GITCODE_BASE_URL = 'https://github.com/jaddd14/gitcode-agent/releases/latest/download'
+irm https://raw.githubusercontent.com/jaddd14/gitcode-agent/main/scripts/install.ps1 | iex
+```
+
+These are pending publication, not currently verified installation commands. Installers use SHA256 verification and require no administrator rights. A verified installation can later be updated with `gitcode update`.
+
 ## Run from source
 
 Use Rust 1.99, the installed toolchain used during development. Older Rust versions have not been verified.

@@ -312,9 +312,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         .any(|c| c.name == name)
                         || name == "new";
                     if !is_builtin {
-                        let home = std::env::var_os("HOME")
-                            .map(std::path::PathBuf::from)
-                            .ok_or_else(|| io::Error::other("HOME is required"))?;
+                        let home = crate::platform::home_dir()
+                            .ok_or_else(|| io::Error::other("home directory is required"))?;
                         let root = agent.tools.permissions.root.clone();
                         let name = name.to_owned();
                         let args = args.to_owned();
@@ -349,9 +348,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     if let Some(choice) =
                         super::theme_picker::select(&mut renderer, &mut events).await?
                     {
-                        let home = std::env::var_os("HOME")
-                            .map(std::path::PathBuf::from)
-                            .ok_or_else(|| io::Error::other("HOME is required"))?;
+                        let home = crate::platform::home_dir()
+                            .ok_or_else(|| io::Error::other("home directory is required"))?;
                         let saved = tokio::task::spawn_blocking(move || {
                             crate::config::save_theme(&home, choice)
                         })
@@ -364,6 +362,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                 status.toast = Some(format!("Тема: {}", choice.preset.label()));
                             }
                             Err(error) => {
+                                renderer.set_theme(Theme::default());
                                 status.toast = Some(format!("Тема не сохранена: {error}"))
                             }
                         }
@@ -381,9 +380,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     continue;
                 }
                 if prompt.trim() == "/usage" {
-                    let home = std::env::var_os("HOME")
-                        .map(std::path::PathBuf::from)
-                        .ok_or_else(|| io::Error::other("HOME is required"))?;
+                    let home = crate::platform::home_dir()
+                        .ok_or_else(|| io::Error::other("home directory is required"))?;
                     let entries = tokio::task::spawn_blocking(move || {
                         crate::usage::UsageLedger::open(&home)?.entries(None)
                     })
@@ -504,7 +502,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                         let id = session.id.clone();
                                         let appended = outcome.messages[messages.len()..].to_vec();
                                         let requests = outcome.request_usage.clone();
-                                        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or_else(|| io::Error::other("HOME is required"))?;
+                                        let home = crate::platform::home_dir().ok_or_else(|| io::Error::other("home directory is required"))?;
                                         let project = session.project.clone();
                                         let provider = options.provider.to_owned();
                                         let model = options.model.to_owned();

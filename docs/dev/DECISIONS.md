@@ -1,5 +1,9 @@
 # Decisions
 
+- 2026-11-08: M19 preserves the complete worktree in an external source archive before moving the uncommitted Windows delta onto the current main commit. The main worktree and stable binary remain unchanged. Native three-platform CI is mandatory before merge; missing local MinGW is not Windows compilation evidence.
+- 2026-11-08: The updater owns the sole install-origin source constant. Installer rendering reads it; generated installer copies are not independent configuration sources. The custom domain returned 404, so deployment documentation labels it to be enabled.
+- 2026-11-08: Canonicalize temporary test roots before strict session-store checks. macOS system temporary-directory symlinks must not weaken production symlink rejection. Windows subprocess tests isolate both HOME and USERPROFILE.
+
 - 2026-11-07: Add crossterm event streams for terminal input, unicode-segmentation/width for grapheme-safe editing, signal-hook for termination cleanup, ignore/regex/globset for native workspace search, and clap for typed CLI parsing. No terminal mouse capture or alternate screen is enabled.
 - 2026-11-07: Until an explicit approval UI exists, permission decisions of Ask return an error rather than granting access. Editing runs on blocking workers, serially; individual renames are atomic, multi-file transactions use best-effort rollback and are not crash-atomic.
 - 2026-11-07: Unsupported terminal actions are reported explicitly rather than simulated. Full parity remains an acceptance target, not a current product claim.
