@@ -126,6 +126,23 @@ async fn snapshots_are_independent_selected_only_and_reopenable() {
     assert!(!f.storage.join("shadow.git/refs/heads/master").exists());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn workspace_alias_accepts_absolute_paths_but_not_symlink_files() {
+    let f = Fixture::new();
+    f.write("a", b"original");
+    let alias = f.base.join("alias");
+    std::os::unix::fs::symlink(&f.root, &alias).unwrap();
+    let cp = Checkpoints::open(&alias, &f.storage).await.unwrap();
+    let id = cp.snapshot(&[alias.join("a")]).await.unwrap();
+    f.write("a", b"changed");
+    cp.restore(&id, &[alias.join("a")]).await.unwrap();
+    assert_eq!(std::fs::read(f.root.join("a")).unwrap(), b"original");
+    std::os::unix::fs::symlink(f.root.join("a"), f.root.join("link")).unwrap();
+    assert!(cp.snapshot(&[alias.join("link")]).await.is_err());
+    assert!(cp.snapshot(&[f.base.join("outside")]).await.is_err());
+}
+
 #[tokio::test]
 async fn never_changes_user_index_history_or_unselected_files() {
     let f = Fixture::new();

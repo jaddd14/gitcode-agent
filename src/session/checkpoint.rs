@@ -34,6 +34,7 @@ struct Entry {
 /// are recorded explicitly. IDs name manifest blobs, not commits; no index or refs
 /// are created. Git environment variables and global/system configuration are ignored.
 pub struct Checkpoints {
+    input_root: PathBuf,
     root: PathBuf,
     git_dir: PathBuf,
 }
@@ -44,6 +45,13 @@ impl Checkpoints {
     /// Existing repositories without this format's marker are refused. Storage and
     /// workspace must be private to the caller while an operation is in progress.
     pub async fn open(root: &Path, storage: &Path) -> Result<Self, String> {
+        let input_root = if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|e| format!("resolve current directory: {e}"))?
+                .join(root)
+        };
         let root = std::fs::canonicalize(root).map_err(|e| format!("resolve workspace: {e}"))?;
         if !root.is_dir() {
             return Err("checkpoint workspace must be a directory".into());
@@ -55,7 +63,11 @@ impl Checkpoints {
         if git_dir.starts_with(&root) || root.starts_with(&git_dir) {
             return Err("checkpoint storage must be outside workspace".into());
         }
-        let this = Self { root, git_dir };
+        let this = Self {
+            input_root,
+            root,
+            git_dir,
+        };
         match std::fs::symlink_metadata(&this.git_dir) {
             Ok(_) => this.validate_store()?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -176,6 +188,7 @@ impl Checkpoints {
     fn relative(&self, path: &Path) -> Result<PathBuf, String> {
         let relative = if path.is_absolute() {
             path.strip_prefix(&self.root)
+                .or_else(|_| path.strip_prefix(&self.input_root))
                 .map_err(|_| "checkpoint path is outside workspace")?
         } else {
             path
