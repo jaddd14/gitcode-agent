@@ -34,7 +34,9 @@ Minimal Anthropic thinking replay now preserves text and concatenated signature 
 
 - M13 intermediate: live message/thinking stream-JSON, actual session IDs/duration, bounded stdin and string-based stream-JSON input are wired. Executable mock regression verifies init/delta/result output.
 - M12 intermediate: validated per-request usage and latency are retained by the agent and recorded by both CLI/TUI after completed turns. Unknown cost is explicit; USD budget requests fail closed before network when pricing cannot be enforced.
-- Intermediate main `e521895` was pushed successfully to origin after clean history and working-tree secret scans. No release/CI/deployment completion is claimed.
+- Intermediate main `e521895`, followed by `37e26a7`, was pushed successfully after clean history and working-tree secret scans. GitHub Security run 42458989226 succeeded; CI run 42458989290 is still running. No release/deployment completion is claimed.
+- Release build and `gitcode --version` passed locally (`fast-release-build.log`, `fast-repo-gate.log`). Workflow YAML was parsed locally. Community templates, pinned toolchain, dependency policy and source-verifying staging workflow are present.
+- TodoWrite is now registered in native model tools and connected to the existing validated task-list implementation; deep child-agent runtime remains deferred.
 
 ## Known gaps
 

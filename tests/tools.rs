@@ -13,6 +13,10 @@ async fn read_search_and_deny_rules() {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/a.rs"), "fn main() {}\nneedle\n").unwrap();
     let mut tools = Tools::new(Engine::new(&root, Mode::Default).unwrap());
+    assert!(Tools::definitions()
+        .iter()
+        .any(|tool| tool.name == "TodoWrite"));
+    assert!(tools.execute("TodoWrite", &json!({"todos":[{"content":"Verify workspace","status":"in_progress","activeForm":"Verifying workspace"}]})).await.is_ok());
     assert!(tools
         .execute("Read", &json!({"path":"src/a.rs","offset":2,"limit":1}))
         .await

@@ -28,6 +28,7 @@ pub struct Tools {
     jobs: BTreeMap<String, shell::Job>,
     /// Monotonic counter for background shell job identifiers.
     next_job_id: u64,
+    todos: crate::agent::agency::TodoList,
 }
 
 impl Tools {
@@ -39,12 +40,14 @@ impl Tools {
             shell_session: None,
             jobs: BTreeMap::new(),
             next_job_id: 1,
+            todos: crate::agent::agency::TodoList::new(),
         }
     }
 
     /// Stable tool schemas used by all provider adapters.
     pub fn definitions() -> Vec<Tool> {
         vec![
+            tool("TodoWrite", "Replace the task list with current progress.", json!({"todos":{"type":"array","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]},"activeForm":{"type":"string"}},"required":["content","status"]}}}), &["todos"]),
             tool("Write", "Atomically write workspace text. Existing files must be read first; approval is required.", json!({"path":{"type":"string"},"content":{"type":"string"}}), &["path","content"]),
             tool("Edit", "Replace exact unique text in a previously read file.", json!({"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}}), &["path","old_string","new_string"]),
             tool("MultiEdit", "Apply an ordered atomic batch of exact replacements to one previously read file.", json!({"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["old_string","new_string"],"additionalProperties":false}}}), &["path","edits"]),
@@ -107,6 +110,7 @@ impl Tools {
     /// Execute a validated operation; errors become model-visible tool results.
     pub async fn execute(&mut self, name: &str, input: &Value) -> Result<String, String> {
         match name {
+            "TodoWrite" => return self.todos.update_from_value(input),
             "Bash" => {
                 let command = required(input, "command")?;
                 let secs = input["timeout_seconds"]
