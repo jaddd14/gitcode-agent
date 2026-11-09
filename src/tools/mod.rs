@@ -46,6 +46,18 @@ impl Tools {
         }
     }
 
+    /// Stop owned background jobs and reap the persistent interpreter before
+    /// releasing its workspace (Windows processes hold their current directory).
+    pub async fn shutdown(&mut self) -> Result<(), String> {
+        for (_, job) in std::mem::take(&mut self.jobs) {
+            job.kill().await?;
+        }
+        if let Some(session) = self.shell_session.take() {
+            session.close().await;
+        }
+        Ok(())
+    }
+
     /// Create a tool executor with an explicitly validated native shell selection.
     pub fn with_shell(permissions: Engine, selection: &str) -> Result<Self, String> {
         crate::platform::detect_shell(selection)?;

@@ -473,7 +473,13 @@ impl Session {
 
     /// Kill/reset an idle session. Waits for any active job; use Job::kill for active work.
     pub async fn close(&self) {
-        self.process.lock().await.take();
+        let process = self.process.lock().await.take();
+        if let Some(mut process) = process {
+            let _ = process.child.start_kill();
+            let _ = process.child.wait().await;
+            // Drop also closes the job/process-group guard and descendants.
+            drop(process);
+        }
     }
 }
 
