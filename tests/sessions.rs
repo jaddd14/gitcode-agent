@@ -12,7 +12,7 @@ mod store;
 use gitcode::provider::canonical::{Content, Message, Role};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use store::{SessionStore, MAX_SESSION_BYTES};
 
@@ -71,7 +71,11 @@ fn canonical_storage_paths_are_checked_after_the_root_is_complete() {
     ));
     store::reject_symlinks(&home).unwrap();
     store::reject_symlinks(&project).unwrap();
-    assert!(store::reject_symlinks(&home.join("../outside")).is_err());
+    // PathBuf::join normalizes parent components on Windows verbatim paths.
+    // Preserve the actual untrusted spelling to exercise traversal rejection.
+    let mut traversal = home.as_os_str().to_os_string();
+    traversal.push("/../outside");
+    assert!(store::reject_symlinks(Path::new(&traversal)).is_err());
     let store = SessionStore::open(&home, &project).unwrap();
     let session = store.create("Canonical storage", None).unwrap();
     store

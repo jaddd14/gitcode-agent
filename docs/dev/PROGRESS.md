@@ -4,6 +4,8 @@
 
 ### M19 validation checkpoint (2026-11-09)
 
+- CI `42577865816` on `0a9a936`: Linux/macOS pass; Windows progress-event cleanup now passes. Next failure `tests/sessions.rs:74`: PathBuf::join normalizes `..` on verbatim Windows paths before validation, so the fixture no longer contains traversal. Build the malicious spelling as raw OsString to preserve `/../outside` and retain the unconditional rejection assertion; production checks unchanged. Full local gate passes (`/root/.gitcode-dev/logs/m19-traversal-gate.log`, exit 0). Native rerun required.
+
 - CI `42576098667` on `0441b0b`: all native platform/session/wrapper tests PASS. Windows later fails `tests/progress_events.rs:270` removing a workspace still held as the dropped shell's cwd (sharing violation 32); Linux/macOS pass. Add explicit Tools shutdown and await persistent interpreter termination/reaping before fixture cleanup. Retain immediate remove_dir_all assertion; no sleeps/retries or disabled checks. Full local gate passes (`/root/.gitcode-dev/logs/m19-shutdown-gate.log`, exit 0). Native rerun and installer smokes remain required.
 
 - CI `42574561057` on `4f49204`: native persistent-session status/cwd/env/timeout/cancellation regressions now PASS across the installed Windows shells. Independent wrapper regression exposes a wrong expected value in the new test: a nonterminating Write-Error inside ForEach-Object does not fail its outer pipeline (`M73:0`). Preserve that native PowerShell behavior with an exact zero assertion, and add `-ErrorAction Stop` pipeline case requiring status 1. No production policy/status logic changed for this correction; all prior checks retained. Linux/macOS pass; installer smoke skipped until the entire native gate passes.
