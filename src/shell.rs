@@ -15,11 +15,16 @@ impl Shell {
                 "{{ {command}\n}} </dev/null\nbuiltin printf '\\036M7{id}:%s\\037' \"$?\"\n"
             ),
             ShellKind::Pwsh | ShellKind::PowerShell => {
-                let escaped = command.replace('\'', "''");
-                // Drain PowerShell's object formatter before writing raw framing bytes.
-                // Capture status inside the dot-sourced block, before Out-Default
-                // can replace `$?`; dot-sourcing preserves cwd and environment.
-                format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $global:LASTEXITCODE=0; . {{ try {{ . ([scriptblock]::Create('{escaped}')); $__gc_ok=$?; if ($__gc_ok) {{ $__gc_code=0 }} elseif ($LASTEXITCODE) {{ $__gc_code=$LASTEXITCODE }} else {{ $__gc_code=1 }} }} catch {{ Write-Output $_; $__gc_code=1 }} }} | Out-Default; [Console]::Out.Write(([char]30)+'M7{id}:'+$__gc_code+([char]31)); [Console]::Out.Flush()\r\n")
+                // Capture status in the user's script block: invoking a script block
+                // can itself succeed after a nonterminating error inside it. A newline
+                // also keeps a trailing user comment from swallowing the capture.
+                let body = format!(
+                    "{command}\n$__gc_ok=$?; if ($__gc_ok) {{ $__gc_code=0 }} elseif ($LASTEXITCODE) {{ $__gc_code=$LASTEXITCODE }} else {{ $__gc_code=1 }}"
+                );
+                let escaped = body.replace('\'', "''");
+                // Dot-sourcing retains cwd/env; drain object formatting before framing.
+                // Reset native status per request so an earlier failure cannot leak.
+                format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $global:LASTEXITCODE=0; $__gc_code=1; . {{ try {{ . ([scriptblock]::Create('{escaped}')) }} catch {{ Write-Output $_; $__gc_code=1 }} }} | Out-Default; [Console]::Out.Write(([char]30)+'M7{id}:'+$__gc_code+([char]31)); [Console]::Out.Flush()\r\n")
             }
             ShellKind::Cmd => {
                 format!("@chcp 65001 >nul\r\n{command}\r\n@echo \x1eM7{id}:%errorlevel%\x1f\r\n")

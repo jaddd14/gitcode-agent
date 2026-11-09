@@ -176,6 +176,30 @@ async fn native_sessions_persist_and_recover_after_timeout() {
                 .unwrap();
             assert_ne!(output.exit_code, Some(0), "{selection}: {}", output.output);
             assert!(!output.output.is_empty(), "{selection}: error output lost");
+            // Exercise status at the user-script boundary, not just the outer
+            // dot-source invocation. Final-command/pipeline status follows PS.
+            for (command, expected, text) in [
+                ("Write-Output 'кириллица'; throw 'terminating-regression'", 1, "terminating-regression"),
+                ("Write-Error nonterminating-regression", 1, "nonterminating-regression"),
+                ("cmd.exe /D /C exit 7", 7, ""),
+                ("Get-Item missing-native-shell-regression-file", 1, "missing-native-shell-regression-file"),
+                ("Write-Output recovered # trailing comment", 0, "recovered"),
+                ("cmd.exe /D /C exit 9", 9, ""),
+                ("Write-Output fresh-status", 0, "fresh-status"),
+                ("Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }", 1, "pipeline-regression"),
+                ("Get-Item missing-native-shell-regression-file; Write-Output final-success", 0, "final-success"),
+                ("$env:GITCODE_NATIVE_REGRESSION='retained'; Write-Output $env:GITCODE_NATIVE_REGRESSION", 0, "retained"),
+                ("Write-Output $env:GITCODE_NATIVE_REGRESSION", 0, "retained"),
+                ("[pscustomobject]@{ Name='formatted-regression'; Value=42 }", 0, "formatted-regression"),
+                ("Write-Output clean-after-format", 0, "clean-after-format"),
+            ] {
+                let output = session.execute(&engine, command, Duration::from_secs(15)).await.unwrap();
+                assert_eq!(output.exit_code, Some(expected), "{selection}: {command}: {}", output.output);
+                assert!(output.output.contains(text), "{selection}: {command}: {}", output.output);
+                if command == "Write-Output clean-after-format" {
+                    assert_eq!(output.output.trim(), "clean-after-format", "{selection}");
+                }
+            }
         }
         let output = session
             .execute(&engine, slow, Duration::from_millis(100))
@@ -187,6 +211,18 @@ async fn native_sessions_persist_and_recover_after_timeout() {
             .await
             .unwrap();
         assert!(output.output.contains("recovered"));
+        let job = session
+            .background(&engine, slow, Duration::from_secs(30))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        job.kill().await.unwrap();
+        let output = session
+            .execute(&engine, "echo after-cancel", Duration::from_secs(15))
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, Some(0), "{selection}: {}", output.output);
+        assert!(output.output.contains("after-cancel"), "{selection}");
         session.close().await;
     }
     std::fs::remove_dir_all(root).unwrap();

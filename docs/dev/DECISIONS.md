@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-09: Capture PowerShell `$?` inside the user's dynamically compiled script, immediately after its final statement, not after dot-source invocation. Preserve PowerShell final-command/pipeline semantics rather than converting all nonterminating errors to terminating errors; reset LASTEXITCODE per request and retain exact failing native exit codes. Append capture on a fresh line to survive trailing comments; drain formatting before completion framing. Native tests cover both installed PowerShell families, timeout and background cancellation recovery.
+
 - 2026-11-09: Persistent PowerShell commands drain object formatting through `Out-Default` before emitting raw completion framing. Status is captured inside the dot-sourced command block before formatting, preserving cwd/environment and nonzero outcomes. Native CI must verify both Windows PowerShell and pwsh; string-shape tests alone are not runtime evidence.
 
 - 2026-11-09: Hooks preserve their existing POSIX command dialect on Windows by resolving native Git Bash, not translating configured scripts into PowerShell/cmd or assuming `/bin/sh` exists. A missing Git Bash produces the existing non-blocking hook diagnostic. Native MCP stdio fixtures resolve the same interpreter while retaining all protocol assertions.
