@@ -16,7 +16,17 @@ Configuration, sessions and credentials use `%USERPROFILE%\.gitcode`. Credential
 
 ## Terminal and input
 
-Use Windows Terminal with a Unicode-capable font. Some terminal hosts cannot distinguish Shift+Enter. Use Alt+Enter or Ctrl+J for a newline; terminal-specific keyboard capabilities may vary. Legacy conhost, synchronized painting, graphics and keyboard extensions require native validation and may degrade. The intro animation is unchanged.
+Use Windows Terminal with a Unicode-capable font. Some terminal hosts cannot distinguish Shift+Enter. Use Alt+Enter or Ctrl+J for a newline. A trailing backslash followed by Enter also inserts a newline (replacing that backslash); ordinary Enter submits. Terminal-specific keyboard capabilities may vary. Optional synchronized painting and Kitty keyboard escapes are disabled for unknown hosts, multiplexers and Windows console backends; known Unix Kitty/foot hosts may enable keyboard disambiguation, while known Kitty/foot/WezTerm hosts may enable synchronized painting. This is conservative environment-based inference, not protocol negotiation. Kitty graphics are not implemented and no graphics escapes are emitted. Legacy conhost uses the basic rendering path. The intro animation is unchanged.
+
+Startup attempts to set both console code pages to UTF-8 before enabling ANSI processing. Detached or unavailable console handles may reject the best-effort code-page setup. These code pages are console-wide and are not restored on exit. The terminal guard owns a Windows close/break/cooked-Ctrl+C listener, attempts terminal restoration before exit, and cancels and joins its listener worker on normal shutdown. Raw-mode Ctrl+C remains an editor key. OS close deadlines and disconnected output can prevent full visual cleanup; native Windows behavior still requires CI/runtime validation.
+
+### Clipboard and optional host feedback
+
+`/copy` writes the last assistant text only in an interactive Windows session, using Windows PowerShell 5.1's native clipboard command. Text travels as UTF-8 stdin, never as executable script content. Unavailable/redirected clipboards report failure; no false success toast is emitted.
+
+Explicit **Ctrl+V** requests one image from the Windows clipboard and stages it visibly for the next prompt. Bracketed text-paste events never trigger image reads. The fixed STA helper encodes PNG; transport is limited to 4 MiB and 16 million pixels, with a five-second timeout. Reading can briefly block UI input. A second successful image paste replaces the staged image; Esc/Ctrl+C or replacing the draft discards it. Already submitted queued prompts retain their own attachment. Slash commands with images are rejected rather than silently sending them. Image transport depends on provider support; no clipboard-text fallback, pasted-file import or Linux image support is implied. Native GUI clipboard behavior remains unvalidated on this Linux worker.
+
+Known WezTerm hosts receive a static product title and static successful-turn OSC 9 notification; Windows Terminal receives the documented OSC 2 title only. Notification display is controlled by the host/OS. Unknown hosts, multiplexers and noninteractive output receive neither optional feedback escape. No conversation, project path or provider text enters titles/notifications. Windows Terminal toast fallback is not implemented; do not assume desktop notifications in that host.
 
 ## Security boundaries
 

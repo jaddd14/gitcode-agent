@@ -529,6 +529,7 @@ dependencies = [
 name = "gitcode"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "crossterm",
  "enable-ansi-support",
@@ -550,6 +551,7 @@ dependencies = [
  "toml",
  "unicode-segmentation",
  "unicode-width",
+ "win32console",
  "win32job",
  "zip",
 ]
@@ -1918,6 +1920,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "win32console"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e69bbdf01990d3e8b9f5a7c4667feda30c63be20aa2f8e66b2f4efb6c06f673"
+dependencies = [
+ "winapi",
 ]
 
 [[package]]

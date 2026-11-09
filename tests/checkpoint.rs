@@ -51,11 +51,18 @@ impl Fixture {
     }
 
     fn git(&self, args: &[&str]) -> Vec<u8> {
-        let output = Command::new("git")
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap())
+        let mut command = Command::new("git");
+        command.env_clear();
+        for name in ["PATH", "SystemRoot", "COMSPEC"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let output = command
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", null)
+            .env("GIT_CONFIG_GLOBAL", null)
             .args([
                 "-c",
                 "user.name=Checkpoint test",

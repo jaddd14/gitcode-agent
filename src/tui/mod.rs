@@ -1,6 +1,8 @@
 //! Event-driven terminal foundation, independent of agent and provider orchestration.
 
 pub mod app;
+pub mod capabilities;
+pub mod clipboard;
 pub mod commands;
 pub mod diff;
 pub mod header;

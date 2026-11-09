@@ -1,5 +1,8 @@
 # Decisions
 
+- 2026-11-09: Session creation always syncs the regular session file; directory fsync is Unix-only because ordinary Windows directory opens fail with access denied. Memory ancestor validation now skips only incomplete Windows prefix components, matching session storage, and still validates completed roots and every descendant. Native Windows CI remains required.
+- 2026-11-09: Optional terminal extensions use a conservative known-host/platform policy rather than blocking startup probes. Unknown hosts run without synchronized-output/Kitty extensions; graphics remain unsupported. Clipboard access is explicit-user-action only, never startup or background polling; transcript text is passed as stdin data to a fixed native script, not interpolated into shell code.
+
 - 2026-11-09: Session-storage ancestor validation accumulates Windows Prefix components without probing them as files, then validates the complete root and all descendants. Bare verbatim drive/UNC prefixes are not filesystem entries; this preserves per-component symlink and parent-traversal rejection.
 
 - 2026-11-08: Checkpoint literal-pathspec tests respect native filename rules: Unix accepts `:(glob)*` literally, while Windows must reject it without mutation. Shared `[literal]` versus `l` round-trip coverage verifies that glob metacharacters are never interpreted on either platform.

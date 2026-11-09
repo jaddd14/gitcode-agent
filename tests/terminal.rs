@@ -62,6 +62,73 @@ fn guard_restores_every_flag_on_drop_and_unwind() {
     assert!(backend.bytes.lock().unwrap().ends_with(RESTORE.as_bytes()));
 }
 #[test]
+fn guard_restoration_uses_detected_extensions() {
+    use gitcode::tui::capabilities::Capabilities;
+    for synchronized_output in [false, true] {
+        let backend = Arc::new(Backend::default());
+        let guard = TerminalGuard::with_backend_and_capabilities(
+            backend.clone(),
+            false,
+            Capabilities {
+                synchronized_output,
+                ..Capabilities::default()
+            },
+        )
+        .unwrap();
+        drop(guard);
+        let bytes = backend.bytes.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+        assert_eq!(output.contains("\x1b[?2026l"), synchronized_output);
+        assert!(!output.contains("\x1b[<u"));
+        assert!(!*backend.raw.lock().unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn guard_pops_keyboard_only_after_successful_push() {
+    use gitcode::tui::capabilities::Capabilities;
+    let capabilities = Capabilities {
+        kitty_keyboard: true,
+        ..Capabilities::default()
+    };
+    let backend = Arc::new(Backend::default());
+    drop(
+        TerminalGuard::with_backend_and_capabilities(backend.clone(), false, capabilities).unwrap(),
+    );
+    let bytes = backend.bytes.lock().unwrap();
+    let output = String::from_utf8_lossy(&bytes);
+    assert!(output.contains("\x1b[>1u"));
+    assert!(output.contains("\x1b[<u"));
+
+    struct RejectKeyboard(Backend);
+    impl TerminalBackend for RejectKeyboard {
+        fn raw(&self) -> io::Result<()> {
+            self.0.raw()
+        }
+        fn cooked(&self) -> io::Result<()> {
+            self.0.cooked()
+        }
+        fn write(&self, bytes: &[u8]) -> io::Result<()> {
+            if bytes.starts_with(b"\x1b[>") {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "keyboard rejected",
+                ));
+            }
+            self.0.write(bytes)
+        }
+    }
+    let backend = Arc::new(RejectKeyboard(Backend::default()));
+    assert!(
+        TerminalGuard::with_backend_and_capabilities(backend.clone(), false, capabilities).is_err()
+    );
+    let bytes = backend.0.bytes.lock().unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("\x1b[<u"));
+    assert!(!*backend.0.raw.lock().unwrap());
+}
+
+#[test]
 fn editor_multiline_unicode_paste_and_ctrl_c() {
     let mut e = Editor::default();
     e.set_text("A👩‍💻е́界");

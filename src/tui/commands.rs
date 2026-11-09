@@ -1023,10 +1023,20 @@ pub async fn execute_command(
                     .collect::<Vec<_>>()
                     .join("\n");
                 let chars = text.chars().count();
-                body.push("Копирование не выполнено: системный буфер обмена не подключён.".into());
-                body.push(format!("Последний ответ содержит {chars} симв. Используй /export <путь.json> для сохранения."));
-                if let Some(first) = text.lines().next() {
-                    body.push(format!("Фрагмент: {first}"));
+                match super::clipboard::copy_text(&text).await {
+                    Ok(()) => {
+                        body.push(format!(
+                            "Ответ скопирован в системный буфер обмена: {chars} симв."
+                        ));
+                        status.toast = Some("Скопировано".into());
+                    }
+                    Err(_) => {
+                        body.push("Копирование не выполнено: системный буфер обмена недоступен в этом окружении.".into());
+                        body.push(format!("Последний ответ содержит {chars} симв. Используй /export <путь.json> для сохранения."));
+                        if let Some(first) = text.lines().next() {
+                            body.push(format!("Фрагмент: {first}"));
+                        }
+                    }
                 }
             } else {
                 body.push("В текущей сессии ещё нет ответов ассистента для копирования.".into());

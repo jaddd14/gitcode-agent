@@ -1,7 +1,11 @@
 //! Native-scrollback output with a bounded, synchronized live area.
 
-use super::{clip, input::Editor, statusbar::Status};
+use super::{capabilities::Capabilities, clip, input::Editor, statusbar::Status};
 use crate::theme::{foreground, ColorMode, Theme};
+use crossterm::{
+    terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate},
+    QueueableCommand,
+};
 use std::io::{self, Write};
 
 /// Cursor-aware projection ready to paint without provider or filesystem work.
@@ -141,10 +145,34 @@ pub struct Renderer<W: Write> {
     theme: Theme,
     mode: ColorMode,
     interactive: bool,
+    capabilities: Capabilities,
 }
 impl<W: Write> Renderer<W> {
-    /// Create an output sink. Noninteractive mode writes finalized text only.
+    /// Create an output sink with historical synchronized byte output.
+    /// Noninteractive mode writes finalized text only. Runtime callers should use
+    /// `with_capabilities` with detected policy instead of assuming support.
     pub fn new(writer: W, width: usize, height: usize, mode: ColorMode, interactive: bool) -> Self {
+        Self::with_capabilities(
+            writer,
+            width,
+            height,
+            mode,
+            interactive,
+            Capabilities {
+                synchronized_output: true,
+                ..Capabilities::default()
+            },
+        )
+    }
+    /// Create an output sink with explicit, deterministic extension policy.
+    pub fn with_capabilities(
+        writer: W,
+        width: usize,
+        height: usize,
+        mode: ColorMode,
+        interactive: bool,
+        capabilities: Capabilities,
+    ) -> Self {
         Self {
             writer,
             live_rows: 0,
@@ -153,6 +181,7 @@ impl<W: Write> Renderer<W> {
             theme: Theme::default(),
             mode,
             interactive,
+            capabilities,
         }
     }
     /// Update geometry; the next event-driven paint reflows its frame.
@@ -179,13 +208,17 @@ impl<W: Write> Renderer<W> {
         Ok(())
     }
     fn sync(&mut self, body: impl FnOnce(&mut Self) -> io::Result<()>) -> io::Result<()> {
-        self.writer.write_all(b"\x1b[?2026h")?;
+        if !self.capabilities.synchronized_output {
+            let result = body(self);
+            return result.and(self.writer.flush());
+        }
+        self.writer.queue(BeginSynchronizedUpdate)?;
         let result = body(self);
         // Close even when body fails so a recoverable write never strands sync mode.
         let close = self
             .writer
-            .write_all(b"\x1b[?2026l")
-            .and_then(|()| self.writer.flush());
+            .queue(EndSynchronizedUpdate)
+            .and_then(|writer| writer.flush());
         result.and(close)
     }
     /// Permanently append text to native scrollback and remove the previous live area.

@@ -20,6 +20,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 futures-util = "0.3"
+base64 = "0.22"
 ignore = "0.4"
 regex = "1"
 globset = "0.4"
@@ -38,6 +39,7 @@ tempfile = "3"
 win32job = "2.0.3"
 os_pipe = "1.2.3"
 enable-ansi-support = "0.3.1"
+win32console = "0.1.5"
 
 [profile.dev]
 opt-level = 1

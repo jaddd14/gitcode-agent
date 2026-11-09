@@ -139,6 +139,9 @@ pub fn validate_windows_path(path: &std::path::Path) -> Result<(), String> {
 /// Prepare ANSI output before entering raw terminal mode.
 pub fn prepare_terminal() -> std::io::Result<()> {
     #[cfg(windows)]
-    enable_ansi_support::enable_ansi_support()?;
+    {
+        prepare_console_utf8();
+        enable_ansi_support::enable_ansi_support()?;
+    }
     Ok(())
 }

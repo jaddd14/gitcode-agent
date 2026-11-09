@@ -1,6 +1,7 @@
 //! Minimal interactive orchestration with native scrollback and cancellable turns.
 
 use super::{
+    capabilities::{Capabilities, TerminalFeedback},
     commands,
     header::Header,
     input::{Action, Editor},
@@ -12,7 +13,7 @@ use super::{
 };
 use crate::{
     agent::Agent,
-    provider::canonical::{Event as Progress, Message, Role, Usage},
+    provider::canonical::{Content, Event as Progress, Message, Role, Usage},
     theme::{self, ColorMode, Theme},
 };
 use crossterm::event::{Event, EventStream};
@@ -170,6 +171,17 @@ fn format_assistant_turn(text: &str, width: usize, theme: &Theme, mode: ColorMod
     rows
 }
 
+async fn stage_clipboard_image(editor: &mut Editor, status: &mut Status) {
+    status.toast = Some(match super::clipboard::paste_image().await {
+        Ok(Some(image)) => {
+            editor.set_image(image);
+            "PNG image attached to this draft; Enter sends, Esc/Ctrl+C clears".into()
+        }
+        Ok(None) => "Clipboard contains no image; existing draft unchanged".into(),
+        Err(error) => format!("Image not attached: {error}"),
+    });
+}
+
 async fn handle_aux_action(
     act: &Action,
     renderer: &mut Renderer<io::Stdout>,
@@ -219,7 +231,8 @@ async fn handle_aux_action(
 /// Completed turns are persisted when a session is supplied. Failed or interrupted
 /// turns retain the last completed history rather than inventing tool results.
 pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
-    let _guard = TerminalGuard::enter()?;
+    let capabilities = Capabilities::detect(true);
+    let _guard = TerminalGuard::enter_with_capabilities(capabilities)?;
     let (width, height) = crossterm::terminal::size()?;
     let mode = theme::detect(
         true,
@@ -227,7 +240,16 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
         std::env::var("COLORTERM").ok().as_deref(),
         std::env::var("TERM").ok().as_deref(),
     );
-    let mut renderer = Renderer::new(io::stdout(), width.into(), height.into(), mode, true);
+    let mut renderer = Renderer::with_capabilities(
+        io::stdout(),
+        width.into(),
+        height.into(),
+        mode,
+        true,
+        capabilities,
+    );
+    let feedback = TerminalFeedback::detect(true);
+    let _ = feedback.set_title(&mut io::stdout());
     let mut events = EventStream::new();
     let mut editor = Editor::default();
     let mut initial = None;
@@ -269,7 +291,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
         .as_ref()
         .map(|(_, session)| session.messages.clone())
         .unwrap_or_default();
-    let mut queue = VecDeque::<String>::new();
+    let mut queue = VecDeque::<(String, Option<Content>)>::new();
     let mut exit_armed = false;
     loop {
         status.queued = queue.len();
@@ -279,7 +301,10 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             &status,
             &super::markdown::Markdown::new(),
         )?;
-        let pending = if let Some(prompt) = queue.pop_front() {
+        // Attachments travel with their submitted prompt, not the current editor draft.
+        let mut submitted_image = None;
+        let pending = if let Some((prompt, image)) = queue.pop_front() {
+            submitted_image = image;
             Action::Submit(prompt)
         } else {
             let event = match initial.take() {
@@ -289,9 +314,17 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     None => return Ok(()),
                 },
             };
-            action(event, &mut editor, &mut renderer)
+            let action = action(event, &mut editor, &mut renderer);
+            if matches!(action, Action::Submit(_)) {
+                submitted_image = editor.take_image();
+            }
+            action
         };
         match pending {
+            Action::PasteImage => {
+                stage_clipboard_image(&mut editor, &mut status).await;
+                exit_armed = false;
+            }
             Action::Exit => return Ok(()),
             Action::Interrupt => {
                 if exit_armed {
@@ -303,6 +336,13 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             Action::Submit(mut prompt) => {
                 exit_armed = false;
                 status.toast = None;
+                if prompt.starts_with('/') && submitted_image.is_some() {
+                    status.toast = Some(
+                        "Command not run; image discarded. Paste it again with a normal prompt"
+                            .into(),
+                    );
+                    continue;
+                }
                 if let Some(command) = prompt.strip_prefix('/') {
                     let (name, args) = command
                         .split_once(char::is_whitespace)
@@ -471,7 +511,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     mode,
                 ))?;
                 let mut request = messages.clone();
-                request.push(Message::text(Role::User, prompt));
+                let mut user_message = Message::text(Role::User, prompt);
+                if let Some(image) = submitted_image {
+                    user_message.content.push(image);
+                }
+                request.push(user_message);
                 let (sender, mut progress) = mpsc::channel(256);
                 let started = Instant::now();
                 let mut stream = super::markdown::Markdown::new();
@@ -514,6 +558,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     }
                                     messages = outcome.messages;
                                     renderer.finalize_styled(&format_assistant_turn(&outcome.text, renderer.size().0, &Theme::default(), mode))?;
+                                    let _ = feedback.notify_completed_turn(&mut io::stdout());
                                 }
                                 Err(error) => {
                                     let err_card = widgets::card(
@@ -575,8 +620,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     break;
                                 }
                                 Action::Submit(prompt) => {
-                                    queue.push_back(prompt);
+                                    queue.push_back((prompt, editor.take_image()));
                                     status.queued = queue.len();
+                                }
+                                Action::PasteImage => {
+                                    stage_clipboard_image(&mut editor, &mut status).await;
                                 }
                                 Action::Transcript => {
                                     let w = renderer.size().0.saturating_sub(1).max(20);

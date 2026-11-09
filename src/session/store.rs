@@ -294,6 +294,9 @@ impl SessionStore {
             file.lock()?;
             file.write_all(&bytes)?;
             file.sync_all()?;
+            // Ordinary directory handles cannot be opened/synced on Windows.
+            // The regular session file is still synchronously committed above.
+            #[cfg(unix)]
             File::open(&self.directory)?.sync_all()?;
             return Ok(Session {
                 id,

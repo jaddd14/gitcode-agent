@@ -228,24 +228,37 @@ fn interpolate(value: &mut toml::Value, env: &BTreeMap<String, String>) -> Resul
         toml::Value::String(text) => {
             let mut result = String::new();
             let mut rest = text.as_str();
-            while let Some(start) = rest.find("${") {
+            while let Some(start) = rest.find(['$', '%']) {
                 result.push_str(&rest[..start]);
-                rest = &rest[start + 2..];
-                let end = rest.find('}').ok_or_else(|| {
-                    invalid(
-                        Path::new("environment"),
-                        "interpolation",
-                        "unterminated variable",
-                    )
-                })?;
-                result.push_str(env.get(&rest[..end]).ok_or_else(|| {
+                rest = &rest[start..];
+                let (name, consumed) = if let Some(variable) = rest.strip_prefix("${") {
+                    let end = variable.find('}').ok_or_else(|| {
+                        invalid(
+                            Path::new("environment"),
+                            "interpolation",
+                            "unterminated variable",
+                        )
+                    })?;
+                    (&variable[..end], end + 3)
+                } else if let Some(suffix) = rest.strip_prefix("$HOME").filter(|suffix| {
+                    !suffix.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                }) {
+                    ("HOME", rest.len() - suffix.len())
+                } else if rest.starts_with("%USERPROFILE%") {
+                    ("USERPROFILE", "%USERPROFILE%".len())
+                } else {
+                    result.push_str(&rest[..1]);
+                    rest = &rest[1..];
+                    continue;
+                };
+                result.push_str(env.get(name).ok_or_else(|| {
                     invalid(
                         Path::new("environment"),
                         "interpolation",
                         "required variable is unset",
                     )
                 })?);
-                rest = &rest[end + 1..];
+                rest = &rest[consumed..];
             }
             result.push_str(rest);
             *text = result;
@@ -431,6 +444,97 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v.as_str(), Some("https://example.com/v1"));
+    }
+
+    #[test]
+    fn interpolation_supports_home_and_userprofile_in_nested_strings() {
+        let env = BTreeMap::from([
+            ("HOME".into(), "/home/example".into()),
+            ("USERPROFILE".into(), r"C:\Users\Example User".into()),
+            ("BASE".into(), "https://example.com".into()),
+        ]);
+        let mut value: toml::Value = r#"
+            path = '$HOME/.gitcode'
+            nested = ['%USERPROFILE%\.gitcode', '${BASE}/$HOME/%USERPROFILE%']
+            count = 7
+        "#
+        .parse()
+        .unwrap();
+        interpolate(&mut value, &env).unwrap();
+        assert_eq!(value["path"].as_str(), Some("/home/example/.gitcode"));
+        assert_eq!(
+            value["nested"][0].as_str(),
+            Some(r"C:\Users\Example User\.gitcode")
+        );
+        assert_eq!(
+            value["nested"][1].as_str(),
+            Some(r"https://example.com//home/example/C:\Users\Example User")
+        );
+        assert_eq!(value["count"].as_integer(), Some(7));
+    }
+
+    #[test]
+    fn interpolation_preserves_longer_names_and_other_shell_syntax() {
+        let input = "$HOMEPATH $HOME_DIR $HOME1 $HOMEpath $OTHER %USERPROFILE_DIR% %OTHER% %USERPROFILE $(echo test) `echo test` — $HOME/данные";
+        let mut value = toml::Value::String(input.into());
+        interpolate(
+            &mut value,
+            &BTreeMap::from([("HOME".into(), "/explicit".into())]),
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_str(),
+            Some("$HOMEPATH $HOME_DIR $HOME1 $HOMEpath $OTHER %USERPROFILE_DIR% %OTHER% %USERPROFILE $(echo test) `echo test` — /explicit/данные")
+        );
+    }
+
+    #[test]
+    fn interpolation_does_not_expand_inserted_values() {
+        let env = BTreeMap::from([
+            ("HOME".into(), "${MISSING} %USERPROFILE% $HOME".into()),
+            ("USERPROFILE".into(), "$HOME ${UNTERMINATED".into()),
+            ("BASE".into(), "%USERPROFILE% $HOME ${MISSING}".into()),
+        ]);
+        let mut value = toml::Value::String("$HOME|%USERPROFILE%|${BASE}".into());
+        interpolate(&mut value, &env).unwrap();
+        assert_eq!(
+            value.as_str(),
+            Some("${MISSING} %USERPROFILE% $HOME|$HOME ${UNTERMINATED|%USERPROFILE% $HOME ${MISSING}")
+        );
+    }
+
+    #[test]
+    fn interpolation_requires_explicit_variables_and_preserves_errors() {
+        for (input, expected_reason) in [
+            ("$HOME", "required variable is unset"),
+            ("%USERPROFILE%", "required variable is unset"),
+            ("${HOME}", "required variable is unset"),
+            ("${}", "required variable is unset"),
+            ("${HOME", "unterminated variable"),
+            ("prefix $OTHER ${", "unterminated variable"),
+        ] {
+            let mut value = toml::Value::String(input.into());
+            match interpolate(&mut value, &BTreeMap::new()).unwrap_err() {
+                Error::Config { path, key, reason } => {
+                    assert_eq!(path, Path::new("environment"));
+                    assert_eq!(key, "interpolation");
+                    assert_eq!(reason, expected_reason);
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(value.as_str(), Some(input));
+        }
+        let mut value = toml::Value::String("$HOME%USERPROFILE%${EMPTY}".into());
+        interpolate(
+            &mut value,
+            &BTreeMap::from([
+                ("HOME".into(), String::new()),
+                ("USERPROFILE".into(), String::new()),
+                ("EMPTY".into(), String::new()),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(value.as_str(), Some(""));
     }
 
     #[test]

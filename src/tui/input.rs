@@ -31,6 +31,8 @@ pub enum Action {
     Complete,
     /// Let an external history controller open fuzzy history search.
     SearchHistory,
+    /// Explicitly request an image from the native clipboard (no IO in the editor).
+    PasteImage,
 }
 /// Plain editor projection with a cell-based cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +64,17 @@ pub struct Editor {
     escaped: bool,
     completion_closed: bool,
     completion_selected: usize,
+    image: Option<crate::provider::canonical::Content>,
 }
 impl Editor {
+    /// Replace the explicitly staged image; at most one image is retained per draft.
+    pub fn set_image(&mut self, image: crate::provider::canonical::Content) {
+        self.image = Some(image);
+    }
+    /// Move the attachment together with its submitted prompt, never a later draft.
+    pub fn take_image(&mut self) -> Option<crate::provider::canonical::Content> {
+        self.image.take()
+    }
     /// Current full prompt, without display-only paste chips.
     pub fn text(&self) -> &str {
         &self.text
@@ -97,6 +108,7 @@ impl Editor {
     pub fn set_text(&mut self, text: &str) {
         self.completion_closed = false;
         self.completion_selected = 0;
+        self.image = None;
         self.text = normalize(text);
         self.cursor = self.text.len();
         self.pastes.clear();
@@ -228,6 +240,10 @@ impl Editor {
         use KeyCode::*;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if key.code == Esc {
+            self.image = None;
+        }
         if self.completion_open() && !ctrl {
             let choices = super::commands::candidates(&self.text);
             let selected = self.completion_selected();
@@ -245,7 +261,7 @@ impl Editor {
                     self.completion_selected = (selected + 1).min(choices.len().saturating_sub(1));
                     return Action::Redraw;
                 }
-                Tab | Enter if !shift && !self.text.contains(char::is_whitespace) => {
+                Tab | Enter if !shift && !alt && !self.text.contains(char::is_whitespace) => {
                     if let Some(command) = choices.get(selected) {
                         let command = format!("/{}", command.name);
                         self.set_text(&command);
@@ -263,15 +279,16 @@ impl Editor {
         let was_escaped = std::mem::replace(&mut self.escaped, key.code == Esc);
         match key.code {
             Esc => {
+                self.image = None;
                 return if was_escaped {
                     self.escaped = false;
                     Action::Rewind
                 } else {
                     Action::Interrupt
-                }
+                };
             }
             Char('c') if ctrl => {
-                if self.text.is_empty() {
+                if self.text.is_empty() && self.image.is_none() {
                     return Action::Interrupt;
                 }
                 self.set_text("");
@@ -282,18 +299,22 @@ impl Editor {
                 }
                 self.replace(self.cursor, self.next(), "");
             }
+            Char('v' | 'V') if ctrl && !alt && !shift && key.kind == KeyEventKind::Press => {
+                return Action::PasteImage;
+            }
             Char('l') if ctrl => return Action::Refresh,
             Char('o') if ctrl => return Action::Transcript,
             Char('t') if ctrl => return Action::Todos,
             Char('r') if ctrl => return Action::SearchHistory,
             BackTab => return Action::CyclePermission,
             Tab => return Action::Complete,
-            Enter if shift => self.insert("\n", false),
+            Char('j') if ctrl => self.insert("\n", false),
+            Enter if shift || alt => self.insert("\n", false),
             Enter if self.text[..self.cursor].ends_with('\\') => {
                 self.replace(self.cursor - 1, self.cursor, "\n");
             }
             Enter => {
-                if self.text.trim().is_empty() {
+                if self.text.trim().is_empty() && self.image.is_none() {
                     return Action::None;
                 }
                 let text = std::mem::take(&mut self.text);
@@ -388,6 +409,9 @@ impl Editor {
         if self.cursor >= at {
             display_cursor = tail + self.cursor - at;
         }
+        if self.image.is_some() {
+            display.push_str("\n[PNG image attached · Enter sends · Esc/Ctrl+C clears]");
+        }
         let width = width.max(1);
         let mut view = InputView {
             lines: vec![String::new()],
@@ -426,6 +450,7 @@ impl Editor {
         view
     }
 }
+
 fn normalize(text: &str) -> String {
     text.replace("\r\n", "\n")
         .replace('\r', "\n")
@@ -439,4 +464,103 @@ fn normalize(text: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod newline_tests {
+    use super::*;
+
+    fn image() -> crate::provider::canonical::Content {
+        crate::provider::canonical::Content::Image {
+            media_type: "image/png".into(),
+            data: "fixture".into(),
+        }
+    }
+
+    #[test]
+    fn image_read_requires_explicit_ctrl_v_press() {
+        let mut editor = Editor::default();
+        assert_eq!(editor.handle(Event::Paste("text".into())), Action::Redraw);
+        assert_eq!(editor.text(), "text");
+        assert_eq!(
+            editor.handle(Event::Key(KeyEvent::new(
+                KeyCode::Char('v'),
+                KeyModifiers::CONTROL
+            ))),
+            Action::PasteImage
+        );
+        assert_eq!(editor.text(), "text");
+        let mut release = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        release.kind = KeyEventKind::Release;
+        assert_eq!(editor.handle(Event::Key(release)), Action::None);
+        release.kind = KeyEventKind::Repeat;
+        assert_eq!(editor.handle(Event::Key(release)), Action::None);
+    }
+
+    #[test]
+    fn image_only_submission_moves_once_and_cancel_or_clear_discards() {
+        let mut editor = Editor::default();
+        editor.set_image(image());
+        assert!(editor
+            .view(80)
+            .lines
+            .iter()
+            .any(|line| line.contains("PNG image attached")));
+        assert_eq!(
+            editor.handle(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE
+            ))),
+            Action::Submit("".into())
+        );
+        let queued_image = editor.take_image();
+        editor.set_text("later draft");
+        editor.set_image(image());
+        assert!(queued_image.is_some());
+        assert!(editor.take_image().is_some());
+        assert!(editor.take_image().is_none());
+        for (code, modifiers) in [
+            (KeyCode::Esc, KeyModifiers::NONE),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ] {
+            editor.set_image(image());
+            editor.handle(Event::Key(KeyEvent::new(code, modifiers)));
+            assert!(editor.take_image().is_none());
+        }
+        editor.set_image(image());
+        editor.set_text("");
+        assert!(editor.take_image().is_none());
+    }
+
+    #[test]
+    fn newline_shortcuts_do_not_submit_or_accept_slash_completion() {
+        for (code, modifiers) in [
+            (KeyCode::Enter, KeyModifiers::ALT),
+            (KeyCode::Char('j'), KeyModifiers::CONTROL),
+            (KeyCode::Enter, KeyModifiers::SHIFT),
+        ] {
+            for text in ["hello", "/hel", "hello\\"] {
+                let mut editor = Editor::default();
+                editor.set_text(text);
+                let action = editor.handle(Event::Key(KeyEvent::new(code, modifiers)));
+                assert_eq!(action, Action::Redraw);
+                assert_eq!(editor.text(), format!("{text}\n"));
+                assert_eq!(editor.cursor(), editor.text().len());
+                assert!(editor.history.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_enter_and_backslash_continuation_keep_their_behavior() {
+        let mut editor = Editor::default();
+        editor.set_text("hello");
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(editor.handle(enter.clone()), Action::Submit("hello".into()));
+        assert_eq!(editor.text(), "");
+        editor.set_text("hello\\");
+        assert_eq!(editor.handle(enter.clone()), Action::Redraw);
+        assert_eq!(editor.text(), "hello\n");
+        assert_eq!(editor.handle(enter), Action::Submit("hello\n".into()));
+    }
 }

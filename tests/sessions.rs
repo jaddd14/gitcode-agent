@@ -357,6 +357,30 @@ fn memory_hierarchy_fallback_imports_and_override_order() {
 }
 
 #[test]
+fn memory_loads_canonical_unicode_paths_and_confined_imports() {
+    let f = Fixture::new();
+    let home = f.home.canonicalize().unwrap();
+    let project = f.project.canonicalize().unwrap();
+    let cwd = project.join("nested space-данные");
+    fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.canonicalize().unwrap();
+    #[cfg(windows)]
+    assert!(matches!(
+        cwd.components().next(),
+        Some(std::path::Component::Prefix(prefix)) if prefix.kind().is_verbatim()
+    ));
+    fs::write(home.join("GITCODE.md"), "home\n").unwrap();
+    fs::write(project.join("GITCODE.md"), "project\n").unwrap();
+    fs::write(cwd.join("GITCODE.md"), "nested\n@../rules.md\n").unwrap();
+    fs::write(project.join("rules.md"), "confined import\n").unwrap();
+    let loaded = memory::load(&home, &project, &cwd).unwrap();
+    assert_eq!(loaded.text, "home\nproject\nnested\nconfined import\n");
+    assert_eq!(loaded.sources.len(), 4);
+    fs::write(cwd.join("GITCODE.md"), "@../../outside.md\n").unwrap();
+    assert!(memory::load(&home, &project, &cwd).is_err());
+}
+
+#[test]
 fn memory_rejects_escapes_cycles_missing_imports_invalid_utf8_and_size_limits() {
     let f = Fixture::new();
     let entry = f.project.join("GITCODE.md");
