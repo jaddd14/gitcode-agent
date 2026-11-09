@@ -40,9 +40,9 @@ A local-first terminal coding agent under development in a single Rust Cargo pac
 
 ## Windows port and installers
 
-Native Linux, macOS and Windows test matrices and installer smoke jobs passed [CI 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`; [Security](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738949) passed too. Release publication is still pending. Native GUI clipboard/toast display is not validated by those headless jobs. See [Windows requirements and limitations](docs/windows.md) and [static installer deployment](docs/dev/DEPLOY-INSTALLER.md).
+Native Linux, macOS and Windows test matrices and installer smoke jobs passed [CI 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`; [Security](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738949) passed too. [v0.3.0](https://github.com/jaddd14/gitcode-agent/releases/tag/v0.3.0) is published as Latest with five platform archives and checksums. Native GUI clipboard/toast display is not validated by those headless jobs. See [Windows requirements and limitations](docs/windows.md) and [static installer deployment](docs/dev/DEPLOY-INSTALLER.md).
 
-The custom-domain installer endpoint is not live (manifest check returned HTTP 404). Once a release containing these scripts is verified and merged, the GitHub-hosted installation paths are:
+The custom-domain installer endpoint is not live (manifest check returned HTTP 404). Use the GitHub-hosted installation paths:
 
 ```bash
 export GITCODE_BASE_URL=https://github.com/jaddd14/gitcode-agent/releases/latest/download
@@ -54,7 +54,7 @@ $env:GITCODE_BASE_URL = 'https://github.com/jaddd14/gitcode-agent/releases/lates
 irm https://raw.githubusercontent.com/jaddd14/gitcode-agent/main/scripts/install.ps1 | iex
 ```
 
-These are pending publication, not currently verified installation commands. Installers use SHA256 verification and require no administrator rights. A verified installation can later be updated with `gitcode update`.
+Installers use SHA256 verification and require no administrator rights. Native installer smoke jobs pass on Windows/macOS/Linux runners. Linux GNU archives require a recent distribution: the arm64 v0.3.0 binary requires glibc 2.39 and does not run on this Ubuntu 22.04/glibc 2.35 worker (installer download/checksum succeeded; executable launch failed). Build from source on older systems. A compatible installation can later be updated with `gitcode update`.
 
 ## Run from source
 

@@ -1,6 +1,6 @@
 # Native Windows port
 
-Native Linux/macOS/Windows CI and all three installer smoke jobs passed [run 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`. Release publication is pending. Headless CI validates shell/process/CLI and installer behavior, not interactive clipboard or desktop toast display; those GUI paths remain explicitly unvalidated.
+Native Linux/macOS/Windows CI and all three installer smoke jobs passed [run 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`. [v0.3.0](https://github.com/jaddd14/gitcode-agent/releases/tag/v0.3.0) is published with the native x64 archive, installers, manifest and checksums; release pipeline [42583690059](https://github.com/jaddd14/gitcode-agent/actions/runs/42583690059) passed. Headless CI validates shell/process/CLI and installer behavior, not interactive clipboard or desktop toast display; those GUI paths remain explicitly unvalidated.
 
 ## Requirements and shells
 
