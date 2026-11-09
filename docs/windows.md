@@ -47,5 +47,6 @@ Binaries are not code-signed. SmartScreen may warn; verify the release source an
 - Missing Git: install Git for Windows using the command above, then reopen the terminal.
 - Shell discovery failure: install a supported interpreter or set an explicit shell selection.
 - MCP batch shims: `.cmd` and `.bat` launch through `cmd.exe`; arguments containing unsupported shell metacharacters are rejected rather than silently reinterpreted.
+- Hooks retain POSIX shell syntax on every platform. On Windows they require Git Bash, resolved through native shell discovery rather than `/bin/sh`. Without Git Bash the existing non-blocking hook failure policy returns an explicit diagnostic; hooks are not reinterpreted as PowerShell/cmd syntax.
 - Permission errors: close other running instances and verify write access to the installation directory.
 - Remove the installed `gitcode.exe` and any `.old` file, then remove only its installation directory from the user PATH. Keep `%USERPROFILE%\.gitcode` unless intentionally deleting configuration, credentials and sessions.

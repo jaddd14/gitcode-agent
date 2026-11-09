@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-09: Hooks preserve their existing POSIX command dialect on Windows by resolving native Git Bash, not translating configured scripts into PowerShell/cmd or assuming `/bin/sh` exists. A missing Git Bash produces the existing non-blocking hook diagnostic. Native MCP stdio fixtures resolve the same interpreter while retaining all protocol assertions.
+
 - 2026-11-09: Session creation always syncs the regular session file; directory fsync is Unix-only because ordinary Windows directory opens fail with access denied. Memory ancestor validation now skips only incomplete Windows prefix components, matching session storage, and still validates completed roots and every descendant. Native Windows CI remains required.
 - 2026-11-09: Optional terminal extensions use a conservative known-host/platform policy rather than blocking startup probes. Unknown hosts run without synchronized-output/Kitty extensions; graphics remain unsupported. Clipboard access is explicit-user-action only, never startup or background polling; transcript text is passed as stdin data to a fixed native script, not interpolated into shell code.
 

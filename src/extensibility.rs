@@ -901,7 +901,7 @@ pub struct HookRule {
     pub event: HookEvent,
     /// Optional regex or exact matcher string tested against the target (e.g. tool name).
     pub matcher: Option<String>,
-    /// Shell command executed via `/bin/sh -c`.
+    /// POSIX shell command executed via `/bin/sh -c` (Git Bash on Windows).
     pub command: String,
     /// Execution timeout in milliseconds.
     pub timeout_ms: u64,
@@ -962,7 +962,7 @@ struct HookStdoutJson {
     additional_context: Option<String>,
 }
 
-/// Executes a single [`HookRule`] via `/bin/sh -c`, passing `payload` as JSON on `stdin` and
+/// Executes a [`HookRule`] via POSIX sh (native Git Bash on Windows), passing JSON on stdin and
 /// enforcing `rule.timeout_ms`.
 ///
 /// The raw `rule.command` string is never included in any error or diagnostic message.
@@ -970,7 +970,21 @@ pub async fn run_hook(rule: &HookRule, payload: &Value) -> HookOutcome {
     let timeout_dur = Duration::from_millis(rule.timeout_ms.max(1));
     let payload_bytes = serde_json::to_vec(payload).unwrap_or_else(|_| b"{}".to_vec());
 
-    let mut child = match Command::new("/bin/sh")
+    #[cfg(windows)]
+    let executable = match crate::platform::detect_shell("bash") {
+        Ok(shell) => shell.executable,
+        Err(_) => {
+            return HookOutcome {
+                decision: HookDecision::Allow,
+                reason: None,
+                additional_context: None,
+                diagnostic: Some("POSIX hooks require Git Bash on Windows".into()),
+            }
+        }
+    };
+    #[cfg(not(windows))]
+    let executable = std::path::PathBuf::from("/bin/sh");
+    let mut child = match Command::new(executable)
         .arg("-c")
         .arg(&rule.command)
         .stdin(Stdio::piped())
