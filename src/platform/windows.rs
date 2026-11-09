@@ -70,22 +70,6 @@ impl Drop for ConsoleEvents {
     }
 }
 
-#[cfg(test)]
-mod terminal_tests {
-    #[test]
-    fn console_listener_drop_cancels_and_joins_without_an_app_runtime() -> std::io::Result<()> {
-        // No events are generated; this verifies synchronous guard teardown can
-        // complete even without an existing Tokio runtime or console input loop.
-        for _ in 0..3 {
-            let listener = super::ConsoleEvents::listen(|| {
-                panic!("no console event expected during listener lifetime test");
-            })?;
-            drop(listener);
-        }
-        Ok(())
-    }
-}
-
 fn find(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH")
         .into_iter()
@@ -238,5 +222,21 @@ impl ProcessTree {
             .query_process_id_list()
             .map(|ids| ids.len())
             .map_err(|_| "cannot query process job".into())
+    }
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    #[test]
+    fn console_listener_drop_cancels_and_joins_without_an_app_runtime() -> std::io::Result<()> {
+        // No events are generated; this verifies synchronous guard teardown can
+        // complete even without an existing Tokio runtime or console input loop.
+        for _ in 0..3 {
+            let listener = super::ConsoleEvents::listen(|| {
+                panic!("no console event expected during listener lifetime test");
+            })?;
+            drop(listener);
+        }
+        Ok(())
     }
 }
