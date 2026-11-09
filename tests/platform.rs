@@ -152,8 +152,14 @@ async fn powershell_wrapper_preserves_complex_status_without_relaxing_policy() {
             ),
             ("Write-Output recovered # trailing comment", 0),
             ("Write-Output first-line\nWrite-Output second-line", 0),
+            // Write-Error inside a nested script block does not fail the outer
+            // ForEach-Object pipeline; Stop must propagate a terminating error.
             (
                 "Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }",
+                0,
+            ),
+            (
+                "Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression -ErrorAction Stop }",
                 1,
             ),
             (
