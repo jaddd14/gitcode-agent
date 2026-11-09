@@ -142,7 +142,7 @@ fn feedback_is_static_and_only_emitted_for_documented_hosts() -> std::io::Result
     };
     assert_eq!(
         output(true, &[("TERM_PROGRAM", "WezTerm")])?,
-        b"\x1b]2;gitcode\x1b\\\x1b]9;gitcode: Turn completed\x1b\\"
+        "\x1b]2;gitcode\x1b\\\x1b]9;gitcode: Ход завершён\x1b\\".as_bytes()
     );
     assert_eq!(
         output(true, &[("WT_SESSION", "known-session")])?,

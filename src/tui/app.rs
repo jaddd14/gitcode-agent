@@ -172,13 +172,17 @@ fn format_assistant_turn(text: &str, width: usize, theme: &Theme, mode: ColorMod
 }
 
 async fn stage_clipboard_image(editor: &mut Editor, status: &mut Status) {
+    use crate::i18n::{text, Key, Language};
     status.toast = Some(match super::clipboard::paste_image().await {
         Ok(Some(image)) => {
             editor.set_image(image);
-            "PNG image attached to this draft; Enter sends, Esc/Ctrl+C clears".into()
+            text(Language::default(), Key::ImageStaged).into()
         }
-        Ok(None) => "Clipboard contains no image; existing draft unchanged".into(),
-        Err(error) => format!("Image not attached: {error}"),
+        Ok(None) => text(Language::default(), Key::ClipboardNoImage).into(),
+        Err(error) => format!(
+            "{}: {error}",
+            text(Language::default(), Key::ImageNotAttached)
+        ),
     });
 }
 
@@ -338,8 +342,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 status.toast = None;
                 if prompt.starts_with('/') && submitted_image.is_some() {
                     status.toast = Some(
-                        "Command not run; image discarded. Paste it again with a normal prompt"
-                            .into(),
+                        crate::i18n::text(
+                            crate::i18n::Language::default(),
+                            crate::i18n::Key::CommandImageRejected,
+                        )
+                        .into(),
                     );
                     continue;
                 }

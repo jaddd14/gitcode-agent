@@ -65,7 +65,14 @@ impl TerminalFeedback {
     /// that a desktop notification was displayed. No reply/callback is requested.
     pub fn notify_completed_turn(self, writer: &mut impl Write) -> io::Result<()> {
         if self.notification {
-            writer.write_all(b"\x1b]9;gitcode: Turn completed\x1b\\")?;
+            write!(
+                writer,
+                "\x1b]9;gitcode: {}\x1b\\",
+                crate::i18n::text(
+                    crate::i18n::Language::default(),
+                    crate::i18n::Key::TurnCompleted,
+                )
+            )?;
             writer.flush()?;
         }
         Ok(())

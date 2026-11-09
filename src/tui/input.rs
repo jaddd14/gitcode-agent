@@ -410,7 +410,11 @@ impl Editor {
             display_cursor = tail + self.cursor - at;
         }
         if self.image.is_some() {
-            display.push_str("\n[PNG image attached · Enter sends · Esc/Ctrl+C clears]");
+            display.push('\n');
+            display.push_str(crate::i18n::text(
+                crate::i18n::Language::default(),
+                crate::i18n::Key::ImageAttached,
+            ));
         }
         let width = width.max(1);
         let mut view = InputView {
@@ -505,7 +509,7 @@ mod newline_tests {
             .view(80)
             .lines
             .iter()
-            .any(|line| line.contains("PNG image attached")));
+            .any(|line| line.contains("PNG прикреплён")));
         assert_eq!(
             editor.handle(Event::Key(KeyEvent::new(
                 KeyCode::Enter,

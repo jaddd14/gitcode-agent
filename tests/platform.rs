@@ -72,6 +72,16 @@ fn completion_frames_preserve_native_dialects() {
         let script = shell.script("echo 'literal'", 7);
         assert!(script.contains("M77:"));
         assert!(!shell.description().is_empty());
+        if matches!(kind, ShellKind::Pwsh | ShellKind::PowerShell) {
+            let formatter = script.find("| Out-Default;").unwrap();
+            let marker = script.find("[Console]::Out.Write").unwrap();
+            assert!(
+                formatter < marker,
+                "objects must be formatted before framing"
+            );
+            assert!(script.find("$__gc_ok=$?").unwrap() < formatter);
+            assert!(script.contains("[Console]::Out.Flush()"));
+        }
     }
 }
 
@@ -145,6 +155,28 @@ async fn native_sessions_persist_and_recover_after_timeout() {
             "{selection}: {}",
             output.output
         );
+        if matches!(selection, "pwsh" | "powershell") {
+            let output = session
+                .execute(
+                    &engine,
+                    "Write-Output formatter-drained",
+                    Duration::from_secs(15),
+                )
+                .await
+                .unwrap();
+            assert_eq!(output.exit_code, Some(0), "{selection}: {}", output.output);
+            assert_eq!(output.output.trim(), "formatter-drained", "{selection}");
+            let output = session
+                .execute(
+                    &engine,
+                    "Get-Item missing-native-shell-regression-file",
+                    Duration::from_secs(15),
+                )
+                .await
+                .unwrap();
+            assert_ne!(output.exit_code, Some(0), "{selection}: {}", output.output);
+            assert!(!output.output.is_empty(), "{selection}: error output lost");
+        }
         let output = session
             .execute(&engine, slow, Duration::from_millis(100))
             .await

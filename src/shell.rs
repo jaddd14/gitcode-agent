@@ -16,7 +16,10 @@ impl Shell {
             ),
             ShellKind::Pwsh | ShellKind::PowerShell => {
                 let escaped = command.replace('\'', "''");
-                format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $global:LASTEXITCODE=0; try {{ . ([scriptblock]::Create('{escaped}')); $__gc_ok=$?; if ($__gc_ok) {{ $__gc_code=0 }} elseif ($LASTEXITCODE) {{ $__gc_code=$LASTEXITCODE }} else {{ $__gc_code=1 }} }} catch {{ Write-Output $_; $__gc_code=1 }}; [Console]::Out.Write(([char]30)+'M7{id}:'+$__gc_code+([char]31))\r\n")
+                // Drain PowerShell's object formatter before writing raw framing bytes.
+                // Capture status inside the dot-sourced block, before Out-Default
+                // can replace `$?`; dot-sourcing preserves cwd and environment.
+                format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $global:LASTEXITCODE=0; . {{ try {{ . ([scriptblock]::Create('{escaped}')); $__gc_ok=$?; if ($__gc_ok) {{ $__gc_code=0 }} elseif ($LASTEXITCODE) {{ $__gc_code=$LASTEXITCODE }} else {{ $__gc_code=1 }} }} catch {{ Write-Output $_; $__gc_code=1 }} }} | Out-Default; [Console]::Out.Write(([char]30)+'M7{id}:'+$__gc_code+([char]31)); [Console]::Out.Flush()\r\n")
             }
             ShellKind::Cmd => {
                 format!("@chcp 65001 >nul\r\n{command}\r\n@echo \x1eM7{id}:%errorlevel%\x1f\r\n")

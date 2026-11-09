@@ -23,6 +23,18 @@ pub enum Key {
     Deny,
     /// Context usage label.
     Context,
+    /// Staged image indicator in the prompt.
+    ImageAttached,
+    /// Successful explicit clipboard image staging.
+    ImageStaged,
+    /// Clipboard did not contain an image.
+    ClipboardNoImage,
+    /// Prefix for a failed explicit image read.
+    ImageNotAttached,
+    /// Slash commands cannot carry image attachments.
+    CommandImageRejected,
+    /// Privacy-safe completion notification.
+    TurnCompleted,
 }
 
 /// Resolve an interface label without allocating.
@@ -38,6 +50,32 @@ pub fn text(language: Language, key: Key) -> &'static str {
         (Language::En, Key::Approve) => "Approve",
         (Language::En, Key::Deny) => "Deny",
         (Language::En, Key::Context) => "Context",
+        (Language::Ru, Key::ImageAttached) => {
+            "[PNG прикреплён · Enter — отправить · Esc/Ctrl+C — убрать]"
+        }
+        (Language::En, Key::ImageAttached) => "[PNG attached · Enter sends · Esc/Ctrl+C clears]",
+        (Language::Ru, Key::ImageStaged) => {
+            "PNG прикреплён к черновику; Enter — отправить, Esc/Ctrl+C — убрать"
+        }
+        (Language::En, Key::ImageStaged) => {
+            "PNG attached to this draft; Enter sends, Esc/Ctrl+C clears"
+        }
+        (Language::Ru, Key::ClipboardNoImage) => {
+            "В буфере обмена нет изображения; черновик не изменён"
+        }
+        (Language::En, Key::ClipboardNoImage) => {
+            "Clipboard contains no image; existing draft unchanged"
+        }
+        (Language::Ru, Key::ImageNotAttached) => "Изображение не прикреплено",
+        (Language::En, Key::ImageNotAttached) => "Image not attached",
+        (Language::Ru, Key::CommandImageRejected) => {
+            "Команда не выполнена; изображение убрано. Вставьте его снова с обычным запросом"
+        }
+        (Language::En, Key::CommandImageRejected) => {
+            "Command not run; image discarded. Paste it again with a normal prompt"
+        }
+        (Language::Ru, Key::TurnCompleted) => "Ход завершён",
+        (Language::En, Key::TurnCompleted) => "Turn completed",
     }
 }
 

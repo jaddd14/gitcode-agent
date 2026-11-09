@@ -472,6 +472,11 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
         if glob.as_ref().is_some_and(|g| !g.is_match(relative)) {
             continue;
         }
+        // Search results use a stable slash-separated display on every platform.
+        // Keep native paths for filesystem access, matching and permissions above.
+        let display_path = relative.to_string_lossy();
+        #[cfg(windows)]
+        let display_path = display_path.replace('\\', "/");
         if let Some(regex) = &regex {
             if entry
                 .metadata()
@@ -490,7 +495,7 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
                     if regex.is_match(line) {
                         output.push(format!(
                             "{}:{}:{}",
-                            relative.display(),
+                            display_path,
                             index + 1,
                             line.chars().take(2000).collect::<String>()
                         ));
@@ -501,7 +506,7 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
                 }
             }
         } else {
-            output.push(relative.display().to_string());
+            output.push(display_path.to_string());
         }
         if output.len() >= limit {
             break;

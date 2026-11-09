@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-09: Persistent PowerShell commands drain object formatting through `Out-Default` before emitting raw completion framing. Status is captured inside the dot-sourced command block before formatting, preserving cwd/environment and nonzero outcomes. Native CI must verify both Windows PowerShell and pwsh; string-shape tests alone are not runtime evidence.
+
 - 2026-11-09: Hooks preserve their existing POSIX command dialect on Windows by resolving native Git Bash, not translating configured scripts into PowerShell/cmd or assuming `/bin/sh` exists. A missing Git Bash produces the existing non-blocking hook diagnostic. Native MCP stdio fixtures resolve the same interpreter while retaining all protocol assertions.
 
 - 2026-11-09: Session creation always syncs the regular session file; directory fsync is Unix-only because ordinary Windows directory opens fail with access denied. Memory ancestor validation now skips only incomplete Windows prefix components, matching session storage, and still validates completed roots and every descendant. Native Windows CI remains required.
