@@ -21,10 +21,13 @@ impl Shell {
                 let body = format!(
                     "{command}\n$__gc_ok=$?; if ($__gc_ok) {{ $__gc_code=0 }} elseif ($LASTEXITCODE) {{ $__gc_code=$LASTEXITCODE }} else {{ $__gc_code=1 }}"
                 );
-                let escaped = body.replace('\'', "''");
+                use base64::Engine;
+                // Keep the stdin protocol one physical line. PowerShell's
+                // -Command - parser otherwise buffers multiline quoted input.
+                let encoded = base64::engine::general_purpose::STANDARD.encode(body.as_bytes());
                 // Dot-sourcing retains cwd/env; drain object formatting before framing.
                 // Reset native status per request so an earlier failure cannot leak.
-                format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $global:LASTEXITCODE=0; $__gc_code=1; . {{ try {{ . ([scriptblock]::Create('{escaped}')) }} catch {{ Write-Output $_; $__gc_code=1 }} }} | Out-Default; [Console]::Out.Write(([char]30)+'M7{id}:'+$__gc_code+([char]31)); [Console]::Out.Flush()\r\n")
+                format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $global:LASTEXITCODE=0; $__gc_code=1; . {{ try {{ . ([scriptblock]::Create([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')))) }} catch {{ Write-Output $_; $__gc_code=1 }} }} | Out-Default; [Console]::Out.Write(([char]30)+'M7{id}:'+$__gc_code+([char]31)); [Console]::Out.Flush()\r\n")
             }
             ShellKind::Cmd => {
                 format!("@chcp 65001 >nul\r\n{command}\r\n@echo \x1eM7{id}:%errorlevel%\x1f\r\n")

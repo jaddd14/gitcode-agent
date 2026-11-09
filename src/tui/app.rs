@@ -566,6 +566,9 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     messages = outcome.messages;
                                     renderer.finalize_styled(&format_assistant_turn(&outcome.text, renderer.size().0, &Theme::default(), mode))?;
                                     let _ = feedback.notify_completed_turn(&mut io::stdout());
+                                    tokio::spawn(async move {
+                                        let _ = feedback.notify_completed_turn_native().await;
+                                    });
                                 }
                                 Err(error) => {
                                     let err_card = widgets::card(

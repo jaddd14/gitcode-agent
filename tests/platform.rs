@@ -79,7 +79,26 @@ fn completion_frames_preserve_native_dialects() {
                 formatter < marker,
                 "objects must be formatted before framing"
             );
-            assert!(script.find("$__gc_ok=$?").unwrap() < formatter);
+            use base64::Engine;
+            let encoded = script
+                .split("FromBase64String('")
+                .nth(1)
+                .unwrap()
+                .split('\'')
+                .next()
+                .unwrap();
+            let body = String::from_utf8(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(body.contains("echo 'literal'\n$__gc_ok=$?"));
+            assert_eq!(
+                script.lines().count(),
+                1,
+                "stdin framing must stay one physical line"
+            );
             assert!(script.contains("[Console]::Out.Flush()"));
         }
     }
@@ -186,6 +205,8 @@ async fn native_sessions_persist_and_recover_after_timeout() {
                 ("Write-Output recovered # trailing comment", 0, "recovered"),
                 ("cmd.exe /D /C exit 9", 9, ""),
                 ("Write-Output fresh-status", 0, "fresh-status"),
+                ("Write-Output 'кириллица'", 0, "кириллица"),
+                ("Write-Output first-line\nWrite-Output second-line", 0, "second-line"),
                 ("Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }", 1, "pipeline-regression"),
                 ("Get-Item missing-native-shell-regression-file; Write-Output final-success", 0, "final-success"),
                 ("$env:GITCODE_NATIVE_REGRESSION='retained'; Write-Output $env:GITCODE_NATIVE_REGRESSION", 0, "retained"),

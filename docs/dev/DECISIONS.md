@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-09: The PowerShell stdin wrapper transports the complete UTF-8 user script and status capture as base64 on a single physical line. This preserves multiline commands, trailing comments and non-ASCII literals without letting stdin's interactive parser buffer an unfinished multiline quote. Base64 is transport encoding, not a trust or sandbox boundary.
+
 - 2026-11-09: Capture PowerShell `$?` inside the user's dynamically compiled script, immediately after its final statement, not after dot-source invocation. Preserve PowerShell final-command/pipeline semantics rather than converting all nonterminating errors to terminating errors; reset LASTEXITCODE per request and retain exact failing native exit codes. Append capture on a fresh line to survive trailing comments; drain formatting before completion framing. Native tests cover both installed PowerShell families, timeout and background cancellation recovery.
 
 - 2026-11-09: Persistent PowerShell commands drain object formatting through `Out-Default` before emitting raw completion framing. Status is captured inside the dot-sourced command block before formatting, preserving cwd/environment and nonzero outcomes. Native CI must verify both Windows PowerShell and pwsh; string-shape tests alone are not runtime evidence.
