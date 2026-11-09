@@ -74,8 +74,14 @@ fn canonical_storage_paths_are_checked_after_the_root_is_complete() {
     // PathBuf::join normalizes parent components on Windows verbatim paths.
     // Preserve the actual untrusted spelling to exercise traversal rejection.
     let mut traversal = home.as_os_str().to_os_string();
+    #[cfg(windows)]
+    traversal.push(r"\..\outside");
+    #[cfg(not(windows))]
     traversal.push("/../outside");
     assert!(store::reject_symlinks(Path::new(&traversal)).is_err());
+    let mut mixed_traversal = home.as_os_str().to_os_string();
+    mixed_traversal.push("/../outside");
+    assert!(store::reject_symlinks(Path::new(&mixed_traversal)).is_err());
     let store = SessionStore::open(&home, &project).unwrap();
     let session = store.create("Canonical storage", None).unwrap();
     store

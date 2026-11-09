@@ -451,6 +451,17 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 pub(crate) fn reject_symlinks(path: &Path) -> io::Result<()> {
+    // Verbatim Windows paths treat '/' as an ordinary character rather than a
+    // separator. Reject both spellings before component parsing so model-supplied
+    // mixed slashes cannot disguise parent traversal at this boundary.
+    #[cfg(windows)]
+    if path
+        .to_string_lossy()
+        .split(['/', '\\'])
+        .any(|part| part == "..")
+    {
+        return Err(invalid("parent traversal is not allowed"));
+    }
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
