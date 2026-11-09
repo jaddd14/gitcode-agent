@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-08: Checkpoint literal-pathspec tests respect native filename rules: Unix accepts `:(glob)*` literally, while Windows must reject it without mutation. Shared `[literal]` versus `l` round-trip coverage verifies that glob metacharacters are never interpreted on either platform.
+
 - 2026-11-08: Shadow Git commands use `--git-dir .` inside the validated canonical shadow-store cwd. This avoids passing Rust's Windows verbatim (`\\?\`) paths through Git's argument parser without stripping prefixes, relaxing storage validation, or inheriting user Git configuration. Native Windows CI must verify this repair.
 
 - 2026-11-08: M19 preserves the complete worktree in an external source archive before moving the uncommitted Windows delta onto the current main commit. The main worktree and stable binary remain unchanged. Native three-platform CI is mandatory before merge; missing local MinGW is not Windows compilation evidence.

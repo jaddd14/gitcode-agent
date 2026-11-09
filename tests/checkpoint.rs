@@ -212,6 +212,27 @@ async fn never_changes_user_index_history_or_unselected_files() {
 }
 
 #[tokio::test]
+async fn pathspec_metacharacters_are_literal_on_every_platform() {
+    let f = Fixture::new();
+    let cp = f.open().await;
+    f.write("[literal]", b"selected");
+    f.write("l", b"unselected");
+    let selected = paths(&["[literal]"]);
+    let id = cp.snapshot(&selected).await.unwrap();
+    f.write("[literal]", b"changed");
+    f.write("l", b"must stay changed");
+    cp.restore(&id, &selected).await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("[literal]")).unwrap(),
+        b"selected"
+    );
+    assert_eq!(
+        std::fs::read(f.root.join("l")).unwrap(),
+        b"must stay changed"
+    );
+}
+
+#[tokio::test]
 async fn invalid_paths_and_selections_are_rejected_before_changes() {
     let f = Fixture::new();
     let cp = f.open().await;
@@ -234,8 +255,9 @@ async fn invalid_paths_and_selections_are_rejected_before_changes() {
         ":(glob)*",
         "/outside",
     ] {
-        if bad == ":(glob)*" {
-            // Literal pathspec-like filenames are supported, never interpreted by Git.
+        if bad == ":(glob)*" && cfg!(unix) {
+            // Unix permits these bytes; Windows must reject the invalid filename.
+            // Literal pathspec-like filenames are never interpreted by Git.
             let literal = cp.snapshot(&paths(&[bad])).await.unwrap();
             cp.restore(&literal, &paths(&[bad])).await.unwrap();
             continue;
