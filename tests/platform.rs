@@ -135,6 +135,72 @@ fn windows_boundary_is_component_aware() {
     assert!(platform::detect_shell("not-a-shell").is_err());
 }
 
+/// Exercise framing independently of the deliberately conservative permission parser.
+#[cfg(windows)]
+#[tokio::test]
+async fn powershell_wrapper_preserves_complex_status_without_relaxing_policy() {
+    use std::{process::Stdio, time::Duration};
+    use tokio::io::AsyncWriteExt;
+    for selection in ["pwsh", "powershell"] {
+        let Ok(shell) = platform::detect_shell(selection) else {
+            continue;
+        };
+        let cases = [
+            (
+                "Write-Output 'кириллица'; throw 'terminating-regression'",
+                1,
+            ),
+            ("Write-Output recovered # trailing comment", 0),
+            ("Write-Output first-line\nWrite-Output second-line", 0),
+            (
+                "Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }",
+                1,
+            ),
+            (
+                "[pscustomobject]@{ Name='formatted-regression'; Value=42 }",
+                0,
+            ),
+        ];
+        let mut child = tokio::process::Command::new(&shell.executable)
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        for (id, (command, _)) in cases.iter().enumerate() {
+            input
+                .write_all(shell.script(command, id as u64).as_bytes())
+                .await
+                .unwrap();
+        }
+        input.shutdown().await.unwrap();
+        drop(input);
+        let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        for (id, (_, code)) in cases.iter().enumerate() {
+            assert!(
+                text.contains(&format!("\x1eM7{id}:{code}\x1f")),
+                "{selection}: {text}"
+            );
+        }
+        for expected in [
+            "кириллица",
+            "terminating-regression",
+            "recovered",
+            "second-line",
+            "formatted-regression",
+        ] {
+            assert!(text.contains(expected), "{selection}: {text}");
+        }
+    }
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn native_sessions_persist_and_recover_after_timeout() {
@@ -197,21 +263,34 @@ async fn native_sessions_persist_and_recover_after_timeout() {
             assert!(!output.output.is_empty(), "{selection}: error output lost");
             // Exercise status at the user-script boundary, not just the outer
             // dot-source invocation. Final-command/pipeline status follows PS.
+            for command in [
+                "Write-Output 'кириллица'; throw 'terminating-regression'",
+                "Write-Output recovered # trailing comment",
+                "Write-Output first-line\nWrite-Output second-line",
+                "Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }",
+                "[pscustomobject]@{ Name='formatted-regression'; Value=42 }",
+            ] {
+                assert!(
+                    session
+                        .execute(&engine, command, Duration::from_secs(15))
+                        .await
+                        .is_err(),
+                    "{selection}: unsupported syntax must remain rejected: {command}"
+                );
+            }
             for (command, expected, text) in [
-                ("Write-Output 'кириллица'; throw 'terminating-regression'", 1, "terminating-regression"),
-                ("Write-Error nonterminating-regression", 1, "nonterminating-regression"),
+                ("Get-Item missing-terminating-regression -ErrorAction Stop", 1, "missing-terminating-regression"),                ("Write-Error nonterminating-regression", 1, "nonterminating-regression"),
                 ("cmd.exe /D /C exit 7", 7, ""),
                 ("Get-Item missing-native-shell-regression-file", 1, "missing-native-shell-regression-file"),
-                ("Write-Output recovered # trailing comment", 0, "recovered"),
+                ("Write-Output recovered", 0, "recovered"),
                 ("cmd.exe /D /C exit 9", 9, ""),
                 ("Write-Output fresh-status", 0, "fresh-status"),
                 ("Write-Output 'кириллица'", 0, "кириллица"),
-                ("Write-Output first-line\nWrite-Output second-line", 0, "second-line"),
-                ("Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }", 1, "pipeline-regression"),
+                ("Write-Output first-line; Write-Output second-line", 0, "second-line"),
                 ("Get-Item missing-native-shell-regression-file; Write-Output final-success", 0, "final-success"),
                 ("$env:GITCODE_NATIVE_REGRESSION='retained'; Write-Output $env:GITCODE_NATIVE_REGRESSION", 0, "retained"),
                 ("Write-Output $env:GITCODE_NATIVE_REGRESSION", 0, "retained"),
-                ("[pscustomobject]@{ Name='formatted-regression'; Value=42 }", 0, "formatted-regression"),
+                ("Get-Location", 0, "sub"),
                 ("Write-Output clean-after-format", 0, "clean-after-format"),
             ] {
                 let output = session.execute(&engine, command, Duration::from_secs(15)).await.unwrap();
