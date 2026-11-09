@@ -1,5 +1,7 @@
 # Decisions
 
+- 2026-11-09: Session-storage ancestor validation accumulates Windows Prefix components without probing them as files, then validates the complete root and all descendants. Bare verbatim drive/UNC prefixes are not filesystem entries; this preserves per-component symlink and parent-traversal rejection.
+
 - 2026-11-08: Checkpoint literal-pathspec tests respect native filename rules: Unix accepts `:(glob)*` literally, while Windows must reject it without mutation. Shared `[literal]` versus `l` round-trip coverage verifies that glob metacharacters are never interpreted on either platform.
 
 - 2026-11-08: Shadow Git commands use `--git-dir .` inside the validated canonical shadow-store cwd. This avoids passing Rust's Windows verbatim (`\\?\`) paths through Git's argument parser without stripping prefixes, relaxing storage validation, or inheriting user Git configuration. Native Windows CI must verify this repair.

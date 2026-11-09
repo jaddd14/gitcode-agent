@@ -59,6 +59,28 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn canonical_storage_paths_are_checked_after_the_root_is_complete() {
+    let f = Fixture::new();
+    let home = fs::canonicalize(&f.home).unwrap();
+    let project = fs::canonicalize(&f.project).unwrap();
+    #[cfg(windows)]
+    assert!(matches!(
+        home.components().next(),
+        Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+    ));
+    store::reject_symlinks(&home).unwrap();
+    store::reject_symlinks(&project).unwrap();
+    assert!(store::reject_symlinks(&home.join("../outside")).is_err());
+    let store = SessionStore::open(&home, &project).unwrap();
+    let session = store.create("Canonical storage", None).unwrap();
+    store
+        .append(&session.id, &Message::text(Role::User, "saved"))
+        .unwrap();
+    assert_eq!(store.resume(&session.id).unwrap().messages.len(), 1);
+}
+
+#[test]
 fn canonical_roundtrip_metadata_list_and_stable_project_slug() {
     let f = Fixture::new();
     let store = f.store();

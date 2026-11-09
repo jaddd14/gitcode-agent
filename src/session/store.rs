@@ -459,6 +459,11 @@ pub(crate) fn reject_symlinks(path: &Path) -> io::Result<()> {
             return Err(invalid("parent traversal is not allowed"));
         }
         current.push(component);
+        // A Windows drive/UNC prefix is not a filesystem entry until RootDir
+        // completes it; probing a bare verbatim prefix fails with ERROR_INVALID_FUNCTION.
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(invalid("symlinks are not allowed"))
