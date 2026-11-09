@@ -4,6 +4,8 @@
 
 ### M19 validation checkpoint (2026-11-09)
 
+- **Native validation checkpoint GREEN:** `a5621f6`, CI [42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915): Linux/macOS/Windows test matrices and all three installer smoke jobs pass. Security [42580738949](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738949) passes. README platform badge now reflects verified CI, while release and native GUI clipboard/toast limitations remain explicit. Merge, v0.3.0 publication, real asset distribution and deployment evidence still pending; no DONE marker.
+
 - CI `42579359229` on `c268434`: Windows `129034173159` confirms verbatim path components do not recognize forward-slash traversal. Preserve native backslash and mixed-slash rejection assertions; reject either raw parent-segment spelling before Windows component parsing. No assertion removed and production validation is stricter. Full local gate passes (`/root/.gitcode-dev/logs/m19-mixed-gate.log`, exit 0). Linux/macOS CI pass; native rerun and installer smoke still required.
 
 - CI `42577865816` on `0a9a936`: Linux/macOS pass; Windows progress-event cleanup now passes. Next failure `tests/sessions.rs:74`: PathBuf::join normalizes `..` on verbatim Windows paths before validation, so the fixture no longer contains traversal. Build the malicious spelling as raw OsString to preserve `/../outside` and retain the unconditional rejection assertion; production checks unchanged. Full local gate passes (`/root/.gitcode-dev/logs/m19-traversal-gate.log`, exit 0). Native rerun required.

@@ -3,6 +3,7 @@
 <img src="assets/banner.png" alt="gitcode — A terminal coding agent written in Rust" width="100%" />
 
 [![Rust](https://img.shields.io/badge/rust-1.99-D6336C?style=flat&labelColor=1C1128)](Cargo.toml)
+[![Platforms](https://img.shields.io/badge/platforms-Linux_%7C_macOS_%7C_Windows-7A3FB5?style=flat&labelColor=1C1128)](docs/windows.md)
 [![Status](https://img.shields.io/badge/status-in_development-7A3FB5?style=flat&labelColor=1C1128)](docs/dev/COMPLIANCE-AUDIT.md)
 [![License](https://img.shields.io/badge/license-MIT-7BD389?style=flat&labelColor=1C1128)](LICENSE)
 
@@ -37,9 +38,9 @@ A local-first terminal coding agent under development in a single Rust Cargo pac
 
 *Design illustration, not a captured application screenshot. Some illustrated functionality remains unintegrated.*
 
-## Windows port and installers (pending validation)
+## Windows port and installers
 
-The native Windows port and per-user installers are being validated on `feat/windows`. Windows support is not a published feature until native Windows CI and installer smoke jobs pass. See [Windows requirements and limitations](docs/windows.md) and [static installer deployment](docs/dev/DEPLOY-INSTALLER.md).
+Native Linux, macOS and Windows test matrices and installer smoke jobs passed [CI 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`; [Security](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738949) passed too. Release publication is still pending. Native GUI clipboard/toast display is not validated by those headless jobs. See [Windows requirements and limitations](docs/windows.md) and [static installer deployment](docs/dev/DEPLOY-INSTALLER.md).
 
 The custom-domain installer endpoint is not live (manifest check returned HTTP 404). Once a release containing these scripts is verified and merged, the GitHub-hosted installation paths are:
 

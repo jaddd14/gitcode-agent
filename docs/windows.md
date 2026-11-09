@@ -1,6 +1,6 @@
 # Native Windows port
 
-The Windows port is under validation. Native CI and installer smoke results, not a Linux cross-check, determine release readiness. Do not assume an unreleased build is supported.
+Native Linux/macOS/Windows CI and all three installer smoke jobs passed [run 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`. Release publication is pending. Headless CI validates shell/process/CLI and installer behavior, not interactive clipboard or desktop toast display; those GUI paths remain explicitly unvalidated.
 
 ## Requirements and shells
 
