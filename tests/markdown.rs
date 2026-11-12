@@ -131,18 +131,79 @@ fn tables_reclassify_headers_wrap_cells_and_keep_following_prose() {
     assert_eq!(parser.lines()[1].kind, Kind::TableRule);
     assert_eq!(parser.lines()[2].kind, Kind::TableRow);
     assert_eq!(parser.lines()[3].kind, Kind::Paragraph);
-    let rows = plain(&parser, 11);
-    assert_eq!(rows[0], "Name │Value");
-    assert_eq!(rows[1], "─────┼─────");
-    assert_eq!(rows[2], "alpha│世界 ");
-    assert_eq!(rows[3], "     │世界 ");
-    assert_eq!(rows[4], "after");
+    let rows = plain(&parser, 15);
+    assert_eq!(rows[0], "Name  │ Value  ");
+    assert_eq!(rows[1], "──────┼────────");
+    assert_eq!(rows[2], "alpha │ 世界世 ");
+    assert_eq!(rows[3], "      │ 界     ");
+    assert_eq!(rows[4], "──────┴────────");
+    assert_eq!(rows[5], "after");
     let parser = parse("| `a|b` | c\\|d |\n| --- | --- |\n| z | y |");
     assert_eq!(parser.lines()[0].cells.len(), 2);
     assert_eq!(parser.lines()[0].cells[0][0].text, "a|b");
     assert_eq!(parser.lines()[0].cells[1][0].text, "c|d");
     let not_table = parse("a | b\n-- | ---\n");
     assert!(not_table.lines().iter().all(|l| l.kind == Kind::Paragraph));
+}
+
+#[test]
+fn emphasis_is_styled_and_plain_text_has_no_markers() {
+    let parser =
+        parse("# Заголовок\nОбычный **жирный** и *курсив*, `код` и [ссылка](https://example.org).");
+    let rows = parser.render(100, &Theme::default(), ColorMode::TrueColor);
+    assert!(rows[0].contains("\x1b[1mЗаголовок"));
+    assert!(rows[1].contains("\x1b[1mжирный"));
+    assert!(rows[1].contains("\x1b[3mкурсив"));
+    assert!(rows[1].contains("\x1b[4mссылка"));
+    assert!(!plain(&parser, 100).join("\n").contains("**"));
+}
+
+#[test]
+fn streaming_drains_only_stable_lines_without_losing_table_headers() {
+    let mut parser = Markdown::new();
+    parser.push("first\nsecond\n| Header | Value |\n");
+    let drained = parser.drain_stable(30, &Theme::default(), ColorMode::None, 1);
+    assert_eq!(drained, ["first", "second"]);
+    parser.push("| --- | --- |\n| x | y |\n");
+    assert_eq!(parser.lines()[0].kind, Kind::TableHeader);
+    let mut all = drained;
+    all.extend(plain(&parser, 30));
+    assert!(all.join("\n").contains("Header"));
+    assert_eq!(
+        all.iter().filter(|line| line.as_str() == "first").count(),
+        1
+    );
+}
+
+#[test]
+fn long_unfinished_paragraph_streams_without_duplication() {
+    let text = "один два три четыре пять шесть семь восемь девять десять ".repeat(8);
+    let expected = plain(&parse(&text), 16);
+    let mut parser = Markdown::new();
+    let mut actual = Vec::new();
+    for chunk in text.split_inclusive(' ') {
+        parser.push(chunk);
+        actual.extend(parser.drain_stable(16, &Theme::default(), ColorMode::None, 4));
+    }
+    parser.finish();
+    actual.extend(plain(&parser, 16));
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn long_unfinished_markdown_preserves_inline_styles_while_streaming() {
+    let text = "один **жирный текст** и `код` слова ".repeat(12);
+    let mode = ColorMode::TrueColor;
+    let expected = parse(&text).render(24, &Theme::default(), mode);
+    let mut parser = Markdown::new();
+    let mut actual = Vec::new();
+    for chunk in text.split_inclusive(' ') {
+        parser.push(chunk);
+        actual.extend(parser.drain_stable(24, &Theme::default(), mode, 4));
+    }
+    parser.finish();
+    actual.extend(parser.render(24, &Theme::default(), mode));
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -165,6 +226,40 @@ fn unicode_wrap_preserves_clusters_and_cell_bounds() {
     assert!(markdown::wrap("abc", 0).is_empty());
     assert!(plain(&parse("hi"), 0).is_empty());
     assert_eq!(plain(&parse("- abcdef"), 5), ["• abc", "  def"]);
+}
+
+#[test]
+fn prose_wraps_words_without_splitting_them_unless_too_long() {
+    assert_eq!(markdown::wrap_words("привет мир", 8), ["привет ", "мир"]);
+    assert_eq!(
+        markdown::wrap_words("один длинноеслово", 8),
+        ["один ", "длинноес", "лово"]
+    );
+    assert_eq!(plain(&parse("привет мир"), 8), ["привет ", "мир"]);
+}
+
+#[test]
+fn punctuation_stays_with_words_across_styles_and_in_tables() {
+    for punctuation in [".", ",", "?", "!", ":", ";", "…", "?!", "».", ")"] {
+        let text = format!("Это слово{punctuation}");
+        let rows = markdown::wrap_words(&text, 9);
+        assert_eq!(rows, ["Это ".to_owned(), format!("слово{punctuation}")]);
+        let styled = format!("Это **слово**{punctuation}");
+        assert_eq!(plain(&parse(&styled), 9), rows);
+    }
+    assert_eq!(
+        markdown::wrap_words("драматургии.", 11),
+        ["драматурги", "и."]
+    );
+    let parser =
+        parse("| Область | Значение |\n| --- | --- |\n| Жанры | Поэзия и драматургии. |\n");
+    let rows = plain(&parser, 23);
+    assert!(rows.last().unwrap().contains('┴'));
+    for row in rows.iter().filter(|row| row.contains('│')) {
+        let cell = row.split('│').nth(1).unwrap().trim();
+        assert_ne!(cell, ".");
+        assert!(UnicodeWidthStr::width(row.as_str()) <= 23);
+    }
 }
 
 #[test]
@@ -256,4 +351,81 @@ fn supports_trusted_renderer_output_and_resize_without_reparse() -> std::io::Res
     sink.finalize_styled(&wide)?;
     assert!(!sink.into_inner().contains(&0x1b));
     Ok(())
+}
+
+#[test]
+fn table_rows_have_horizontal_separators_in_stream_and_final_output() {
+    let text = "| Год | Событие |\n| --- | --- |\n| 1799 | Рождение |\n| 1837 | Дуэль |\n";
+    let expected = plain(&parse(text), 40);
+    assert_eq!(expected.iter().filter(|row| row.contains('┼')).count(), 2);
+    assert!(expected.last().unwrap().contains('┴'));
+    assert!(!expected.last().unwrap().contains('┼'));
+    let mut stream = Markdown::new();
+    let mut rendered = Vec::new();
+    for line in text.split_inclusive('\n') {
+        stream.push(line);
+        rendered.extend(stream.drain_stable(40, &Theme::default(), ColorMode::None, 1));
+    }
+    stream.finish();
+    rendered.extend(plain(&stream, 40));
+    assert_eq!(rendered, expected);
+}
+
+#[test]
+fn tables_fit_content_and_keep_columns_aligned_across_streaming_and_resize() {
+    let text = "| Год | Событие |\n| --- | --- |\n| 1799 | Рождение |\n| 1837 | Очень длинное историческое событие |\n";
+    let parser = parse(text);
+    let wide = plain(&parser, 150);
+    assert!(wide
+        .iter()
+        .all(|row| UnicodeWidthStr::width(row.as_str()) < 50));
+    let separators: Vec<usize> = wide
+        .iter()
+        .filter_map(|row| row.find('│').map(|i| UnicodeWidthStr::width(&row[..i])))
+        .collect();
+    assert!(separators.len() >= 3 && separators.iter().all(|col| *col == separators[0]));
+    let narrow = plain(&parser, 24);
+    assert!(narrow
+        .iter()
+        .all(|row| UnicodeWidthStr::width(row.as_str()) <= 24));
+    assert!(narrow.len() > wide.len());
+    let mut stream = Markdown::new();
+    let mut output = Vec::new();
+    for chunk in text.chars() {
+        stream.push(&chunk.to_string());
+        output.extend(stream.drain_stable(150, &Theme::default(), ColorMode::None, 1));
+    }
+    stream.finish();
+    output.extend(plain(&stream, 150));
+    assert_eq!(output, wide);
+
+    let followed = format!("{text}\nПосле таблицы.\n");
+    let mut stream = Markdown::new();
+    let mut output = Vec::new();
+    for line in followed.split_inclusive('\n') {
+        stream.push(line);
+        output.extend(stream.drain_stable(150, &Theme::default(), ColorMode::None, 1));
+    }
+    stream.finish();
+    output.extend(plain(&stream, 150));
+    assert_eq!(output, plain(&parse(&followed), 150));
+}
+
+#[test]
+fn prose_uses_terminal_foreground_while_accent_colors_are_preserved() {
+    let parser = parse("обычный **жирный** [ссылка](https://example.org)");
+    let theme = Theme::default();
+    for mode in [
+        ColorMode::TrueColor,
+        ColorMode::Indexed256,
+        ColorMode::Ansi16,
+    ] {
+        let row = parser.render(100, &theme, mode).join("\n");
+        assert!(row.contains("\x1b[39mобычный"));
+        assert!(row.contains("\x1b[39m\x1b[1mжирный"));
+        assert!(row.contains(&theme::foreground(theme.rose, mode)));
+        assert!(!row.contains(&theme::foreground(theme.text, mode)));
+    }
+    let plain = parser.render(100, &theme, ColorMode::None).join("\n");
+    assert!(!plain.contains('\x1b'));
 }

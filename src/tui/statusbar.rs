@@ -17,6 +17,10 @@ pub struct Status {
     pub input: u64,
     /// Output tokens reported so far.
     pub output: u64,
+    /// Output from the current turn, excluding earlier turns.
+    pub turn_output: u64,
+    /// Whether the displayed live output count includes an estimate.
+    pub output_estimated: bool,
     /// Cache read tokens reported so far.
     pub cache_read: u64,
     /// Cache write tokens reported so far.
@@ -31,12 +35,20 @@ pub struct Status {
     pub busy: bool,
     /// Elapsed wall-clock seconds for the active turn.
     pub elapsed_secs: u64,
+    /// Milliseconds used to animate the active indicator.
+    pub elapsed_millis: u64,
     /// Single in-place retry or rate-limit notice line (`▲ ...`).
     pub retry_notice: Option<String>,
     /// Transient toast notification message.
     pub toast: Option<String>,
     /// Number of queued user prompts waiting behind the active turn.
     pub queued: usize,
+    /// Submitted prompts awaiting application to the model conversation.
+    pub queued_prompts: Vec<String>,
+    /// Live and recently completed delegated tasks.
+    pub subagents: Vec<crate::agent::agency::SubagentRun>,
+    /// Tool invocations started in the current conversation.
+    pub tools_used: usize,
 }
 /// Compact real counts without fabricating unknown totals.
 pub fn compact(value: u64) -> String {
@@ -66,17 +78,30 @@ impl Status {
         use unicode_width::UnicodeWidthStr;
         let right = format!(
             "ctx {context} {} │ {}{}",
-            super::widgets::progress(
-                self.context_percent.unwrap_or(0.0) / 100.0,
-                8,
-                super::widgets::Glyphs::detect()
-            ),
+            {
+                let value = self
+                    .context_percent
+                    .filter(|n| n.is_finite())
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 100.0);
+                let filled = (value / 10.0).floor() as usize;
+                if super::widgets::Glyphs::detect().ascii {
+                    format!("{}{}", "#".repeat(filled), "-".repeat(10 - filled))
+                } else {
+                    format!("{}{}", "▮".repeat(filled), "▯".repeat(10 - filled))
+                }
+            },
             self.branch,
             if self.dirty { "*" } else { "" }
         );
         let parts = [
             format!("✿ {}", self.model),
-            format!("{}↑ {}↓", compact(self.input), compact(self.output)),
+            format!(
+                "{}↑ {}{}↓",
+                compact(self.input),
+                if self.output_estimated { "~" } else { "" },
+                compact(self.output)
+            ),
             format!("кэш {}", compact(self.cache_read)),
             format!("{rate} ток/с"),
             cost,

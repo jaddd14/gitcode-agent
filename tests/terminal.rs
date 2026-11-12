@@ -125,16 +125,22 @@ fn header_plain_snapshot_news_spacing_and_pixel_geometry() {
         cwd: "/work",
         branch: "main",
     };
-    let lines = h.lines(80, &Theme::default(), ColorMode::None);
-    assert!(lines[0].contains("gitcode 0.1.0"));
-    assert!(lines[0].ends_with('╮'));
-    assert!(lines[lines.len() - HEADER_GAP - 1].ends_with('╯'));
-    assert!(lines.iter().any(|line| line.contains("Модель     test")));
-    assert!(lines.iter().any(|line| line.contains("Провайдер  local")));
+    let lines = h.lines(140, &Theme::default(), ColorMode::None);
+    assert!(lines.iter().all(|line| !line.contains("gitcode v")));
+    assert!(!lines[0].contains('╭'));
+    assert!(lines
+        .iter()
+        .all(|line| !line.contains('╰') && !line.contains('╯')));
+    assert!(lines
+        .iter()
+        .any(|line| line.contains("/model — выбрать модель")));
+    assert!(lines
+        .iter()
+        .any(|line| line.contains("/context — состав контекста")));
     assert!(lines
         .iter()
         .take(lines.len() - HEADER_GAP)
-        .all(|s| unicode_width::UnicodeWidthStr::width(s.as_str()) == 80));
+        .all(|s| unicode_width::UnicodeWidthStr::width(s.as_str()) == 96));
     assert!(lines[lines.len() - HEADER_GAP..]
         .iter()
         .all(String::is_empty));
@@ -153,7 +159,7 @@ fn native_scrollback_sync_and_plain_output() {
         ..Status::default()
     };
     let frame = Frame::input(&e, &status, 80, 24);
-    assert!(frame.lines[0].contains("gitcode"));
+    assert!(frame.lines[0].starts_with('╭'));
     assert!(frame.lines[1].contains("› hello"));
     let (cursor_row, cursor_col) = frame.cursor.unwrap();
     assert_eq!(cursor_row, 1);
@@ -170,13 +176,284 @@ fn native_scrollback_sync_and_plain_output() {
     let output = String::from_utf8(r.into_inner()).unwrap();
     assert_eq!(output.matches("\x1b[?2026h").count(), 2);
     assert_eq!(output.matches("\x1b[?2026l").count(), 2);
-    assert!(output.contains("\x1b8\r\x1b[5A\x1b[Janswer\x1b[0m\r\n"));
+    assert!(output.contains("\x1b8\r\x1b[5A\x1b[2K"));
+    assert!(output.contains("answer\x1b[0m\r\n"));
     assert!(!output.contains("1049"));
     let mut r = Renderer::new(Vec::new(), 80, 24, ColorMode::None, false);
     r.paint(&frame).unwrap();
     r.finalize("plain").unwrap();
     assert_eq!(r.into_inner(), b"plain\n");
 }
+
+#[test]
+fn editor_wraps_whole_words_and_keeps_cursor_position() {
+    let mut editor = Editor::default();
+    editor.set_text("привет мир");
+    let view = editor.view(8);
+    assert_eq!(view.lines, ["привет ", "мир"]);
+    assert_eq!((view.cursor_row, view.cursor_col), (1, 3));
+    editor.set_text("один длинноеслово");
+    let view = editor.view(8);
+    assert_eq!(view.lines, ["один ", "длинноес", "лово"]);
+}
+#[test]
+fn editor_soft_wrap_hides_separators_without_changing_prompt() {
+    let mut editor = Editor::default();
+    for text in ["ровно ничего не меняется", "ровно   ничего не меняется"]
+    {
+        editor.set_text(text);
+        let view = editor.view(5);
+        assert_eq!(view.lines, ["ровно", "ничег", "о не ", "меняе", "тся"]);
+        assert_eq!((view.cursor_row, view.cursor_col), (4, 3));
+        assert_eq!(editor.text(), text);
+        assert_eq!(
+            key(&mut editor, KeyCode::Enter, KeyModifiers::NONE),
+            Action::Submit(text.into())
+        );
+    }
+    editor.set_text("12345 next");
+    assert_eq!(editor.view(5).lines, ["12345", "next"]);
+    key(&mut editor, KeyCode::Home, KeyModifiers::NONE);
+    for _ in 0..6 {
+        key(&mut editor, KeyCode::Right, KeyModifiers::NONE);
+    }
+    let view = editor.view(5);
+    assert_eq!((view.cursor_row, view.cursor_col), (1, 0));
+
+    editor.set_text("  abc\n  def");
+    assert_eq!(editor.view(8).lines, ["  abc", "  def"]);
+    editor.set_text("12345\n  def");
+    assert_eq!(editor.view(5).lines, ["12345", "", "  def", ""]);
+}
+
+#[test]
+fn held_deletion_repeats_accelerate_and_release_does_not_delete() {
+    use crossterm::event::KeyEventKind;
+    let mut editor = Editor::default();
+    editor.set_text(&"я".repeat(50));
+    key(&mut editor, KeyCode::Backspace, KeyModifiers::NONE);
+    for _ in 0..8 {
+        editor.handle(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
+    }
+    assert_eq!(editor.text().chars().count(), 40);
+    let before = editor.text().to_owned();
+    editor.handle(Event::Key(KeyEvent::new_with_kind(
+        KeyCode::Backspace,
+        KeyModifiers::NONE,
+        KeyEventKind::Release,
+    )));
+    assert_eq!(editor.text(), before);
+    key(&mut editor, KeyCode::Backspace, KeyModifiers::NONE);
+    assert_eq!(editor.text().chars().count(), 39);
+    key(&mut editor, KeyCode::Home, KeyModifiers::NONE);
+    editor.handle(Event::Key(KeyEvent::new_with_kind(
+        KeyCode::Delete,
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    )));
+    assert_eq!(editor.text().chars().count(), 38);
+}
+
+#[test]
+fn queue_count_is_never_rendered_under_the_prompt() {
+    let status = Status {
+        busy: true,
+        queued: 1,
+        ..Status::default()
+    };
+    let frame = Frame::input(&Editor::default(), &status, 80, 24);
+    assert!(!frame.lines.iter().any(|row| row.contains("В очереди")));
+}
+
+#[test]
+fn input_is_anchored_to_terminal_bottom_and_reflows_after_resize() {
+    let editor = Editor::default();
+    let status = Status::default();
+    let mut renderer = Renderer::new(Vec::new(), 80, 40, ColorMode::None, true);
+    renderer.finalize("startup information").unwrap();
+    let frame = Frame::input(&editor, &status, 79, 40);
+    renderer.paint_bottom(&frame).unwrap();
+    renderer.resize(80, 24);
+    let resized = Frame::input(&editor, &status, 79, 24);
+    renderer.paint_bottom(&resized).unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    assert!(output.contains(&format!("\x1b[{};1H", 40 - frame.lines.len())));
+    assert!(output.contains(&format!("\x1b[{};1H", 24 - resized.lines.len())));
+    assert!(!output.contains("1049"));
+}
+
+#[test]
+fn finalized_content_gets_room_above_the_bottom_composer() {
+    let frame = Frame::input(&Editor::default(), &Status::default(), 79, 24);
+    let mut renderer = Renderer::new(Vec::new(), 80, 24, ColorMode::None, true);
+    renderer.paint_bottom(&frame).unwrap();
+    renderer
+        .finalize_styled(&["user message".into(), String::new()])
+        .unwrap();
+    renderer.paint_bottom(&frame).unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    let after_message = output
+        .split_once("user message\x1b[0m\r\n\x1b[0m\r\n")
+        .unwrap()
+        .1;
+    assert!(after_message.contains(&format!(
+        "{}\x1b[{};1H",
+        "\r\n".repeat(frame.lines.len()),
+        24 - frame.lines.len()
+    )));
+}
+
+#[test]
+fn activity_has_a_blank_line_before_the_composer() {
+    let status = Status {
+        busy: true,
+        ..Status::default()
+    };
+    let frame = Frame::input(&Editor::default(), &status, 79, 24);
+    let activity = frame
+        .lines
+        .iter()
+        .position(|line| line.contains("Думаю"))
+        .unwrap();
+    assert!(frame.lines[activity + 1].is_empty());
+    assert!(frame.lines[activity + 2].starts_with('╭'));
+    assert!(!frame
+        .lines
+        .iter()
+        .any(|line| line.contains("отменить") || line.contains("[esc]")));
+}
+
+#[test]
+fn flow_stream_reuses_visible_rows_without_repainting_the_whole_frame() {
+    let first = Frame {
+        lines: vec!["stable".into(), "tail".into(), "input".into()],
+        cursor: Some((2, 0)),
+    };
+    let second = Frame {
+        lines: vec!["tail".into(), "new".into(), "input".into()],
+        cursor: Some((2, 0)),
+    };
+    let mut renderer = Renderer::new(Vec::new(), 80, 24, ColorMode::None, true);
+    renderer.paint_flow_with_styled_prefix(&first, 2).unwrap();
+    renderer
+        .paint_stream_flow(&["stable".into()], &second, 2)
+        .unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    let update = output.split("\x1b[?2026h").nth(2).unwrap();
+    assert!(!update.contains("\x1b[2K"));
+    assert!(!update.contains("stable"));
+    assert!(update.contains("new"));
+}
+
+#[test]
+fn growing_bottom_composer_scrolls_history_instead_of_overwriting_it() {
+    let frame = Frame::input(&Editor::default(), &Status::default(), 79, 24);
+    let busy = Frame::input(
+        &Editor::default(),
+        &Status {
+            busy: true,
+            ..Status::default()
+        },
+        79,
+        24,
+    );
+    let mut renderer = Renderer::new(Vec::new(), 80, 24, ColorMode::None, true);
+    renderer.paint_bottom(&frame).unwrap();
+    renderer.paint_bottom(&busy).unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    let growth = busy.lines.len() - frame.lines.len();
+    assert!(output.contains(&format!("\x1b[24;1H{}", "\r\n".repeat(growth))));
+}
+
+#[test]
+fn streaming_update_repaints_changed_rows_without_erasing_the_live_frame() {
+    let first = Frame {
+        lines: vec!["old response".into(), "composer".into(), "status".into()],
+        cursor: Some((1, 2)),
+    };
+    let second = Frame {
+        lines: vec![
+            "updated response".into(),
+            "composer".into(),
+            "status".into(),
+        ],
+        cursor: Some((1, 2)),
+    };
+    let mut renderer = Renderer::new(Vec::new(), 80, 24, ColorMode::None, true);
+    renderer.paint_bottom(&first).unwrap();
+    renderer.paint_bottom(&second).unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    let update = output.split("\x1b[?2026h").nth(2).unwrap();
+    assert!(update.contains("updated response"));
+    assert!(!update.contains("composer"));
+    assert!(!update.contains("\x1b[2K"));
+}
+
+#[test]
+fn streamed_scrollback_and_repaint_share_one_synchronized_write() {
+    let first = Frame {
+        lines: vec!["live".into(), "input".into()],
+        cursor: Some((1, 0)),
+    };
+    let second = Frame {
+        lines: vec!["next".into(), "input".into()],
+        cursor: Some((1, 0)),
+    };
+    let mut renderer = Renderer::new(Vec::new(), 80, 24, ColorMode::None, true);
+    renderer.paint_bottom(&first).unwrap();
+    renderer
+        .paint_stream(&["committed".into()], &second, 1)
+        .unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    let batch = output.split("\x1b[?2026h").nth(2).unwrap();
+    assert!(batch.contains("committed") && batch.contains("next"));
+    assert_eq!(batch.matches("\x1b[?2026l").count(), 1);
+}
+
+#[test]
+fn visible_streamed_rows_move_to_scrollback_without_clearing_the_screen() {
+    let first = Frame {
+        lines: vec!["stable".into(), "tail".into(), "input".into()],
+        cursor: Some((2, 0)),
+    };
+    let second = Frame {
+        lines: vec!["tail".into(), "new".into(), "input".into()],
+        cursor: Some((2, 0)),
+    };
+    let mut renderer = Renderer::new(Vec::new(), 80, 24, ColorMode::None, true);
+    renderer.paint_bottom_with_styled_prefix(&first, 2).unwrap();
+    renderer
+        .paint_stream(&["stable".into()], &second, 2)
+        .unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    let update = output.split("\x1b[?2026h").nth(2).unwrap();
+    assert!(!update.contains("\x1b[2K"));
+    assert!(!update.contains("stable"));
+    assert!(update.contains("new"));
+}
+
+#[test]
+fn notification_card_has_yellow_borders_and_inner_padding() {
+    let card = gitcode::tui::widgets::card_with_glyphs(
+        "/model",
+        &["Активная модель".into()],
+        "",
+        40,
+        gitcode::tui::widgets::Glyphs { ascii: false },
+    );
+    assert!(card[1].starts_with("│ Активная модель"));
+    let mut renderer = Renderer::new(Vec::new(), 80, 24, ColorMode::TrueColor, true);
+    renderer.finalize_card(&card).unwrap();
+    let output = String::from_utf8(renderer.into_inner()).unwrap();
+    let yellow = gitcode::theme::foreground(Theme::default().warn, ColorMode::TrueColor);
+    assert!(output.contains(&format!("{yellow}╭")));
+    assert!(output.contains(&format!("{yellow}│\x1b[0m Активная модель")));
+}
+
 #[test]
 fn animation_is_deterministic_and_has_a_bounded_deadline() {
     assert_eq!(intro::DURATION.as_millis(), 700);

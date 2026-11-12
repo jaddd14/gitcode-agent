@@ -34,6 +34,13 @@ pub const GENERAL_PURPOSE_TOOLS: &[&str] = &[
     "Glob",
     "Grep",
     "TodoWrite",
+    "NotebookEdit",
+    "apply_patch",
+    "BashOutput",
+    "KillShell",
+    "McpCall",
+    "WebFetch",
+    "Skill",
 ];
 
 /// Definition of a built-in or user-defined subagent profile.
@@ -115,7 +122,7 @@ impl SubagentProfile {
     /// Checks whether this profile permits invoking the given tool name.
     #[must_use]
     pub fn allows_tool(&self, tool: &str) -> bool {
-        if tool == "Task" {
+        if matches!(tool, "Task" | "Agent") {
             return false;
         }
         if self.read_only && !READ_ONLY_TOOLS.contains(&tool) {

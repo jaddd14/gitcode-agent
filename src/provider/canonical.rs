@@ -190,6 +190,38 @@ pub enum Event {
         /// Execution time in milliseconds, excluding progress delivery.
         duration_ms: u64,
     },
+    /// A delegated agent began an isolated task.
+    SubagentStarted {
+        /// Tool call identifier.
+        id: String,
+        /// Selected profile name.
+        name: String,
+        /// Short task description.
+        task: String,
+    },
+    /// The delegated agent is thinking or using a tool.
+    SubagentUpdated {
+        /// Tool call identifier.
+        id: String,
+        /// Active tool, if any.
+        tool: Option<String>,
+        /// Output tokens reported so far.
+        tokens: u64,
+    },
+    /// A delegated agent finished or failed.
+    SubagentFinished {
+        /// Tool call identifier.
+        id: String,
+        /// Whether the child completed successfully.
+        success: bool,
+        /// Output tokens reported by the child.
+        tokens: u64,
+    },
+    /// Queued user messages added to the active turn.
+    SteeringApplied {
+        /// Messages in submission order.
+        messages: Vec<String>,
+    },
     /// Updated request usage.
     Usage {
         /// Provider usage counters.

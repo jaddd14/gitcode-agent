@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "development-tools"]
 exclude = ["assets/", "testdata/"]
 
 [dependencies]
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

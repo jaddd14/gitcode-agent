@@ -115,7 +115,8 @@ fn home_dir(fallback: &Path) -> PathBuf {
         .unwrap_or_else(|| fallback.to_path_buf())
 }
 
-fn mode_label(mode: Mode) -> &'static str {
+/// Return the short permission label displayed on the prompt border.
+pub fn permission_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Default => "DEFAULT",
         Mode::AcceptEdits => "ACCEPT EDITS",
@@ -124,30 +125,22 @@ fn mode_label(mode: Mode) -> &'static str {
     }
 }
 
-/// Cycle the active permission mode (`Default` → `AcceptEdits` → `Plan` → `Bypass` → `Default`)
-/// and return a structured status card.
-pub fn cycle_permission_card(agent: &mut Agent, status: &mut Status, width: usize) -> Vec<String> {
-    let next = match agent.tools.permissions.mode {
+/// Return the next permission mode in the prompt-line cycle.
+pub fn next_permission_mode(mode: Mode) -> Mode {
+    match mode {
         Mode::Default => Mode::AcceptEdits,
         Mode::AcceptEdits => Mode::Plan,
         Mode::Plan => Mode::Bypass,
         Mode::Bypass => Mode::Default,
-    };
+    }
+}
+
+/// Cycle the active permission mode without adding transcript output.
+pub fn cycle_permission(agent: &mut Agent, status: &mut Status) {
+    let next = next_permission_mode(agent.tools.permissions.mode);
     agent.tools.permissions.mode = next;
-    let label = mode_label(next);
-    status.permission = label.into();
-    status.toast = Some(format!("Режим доступа: [{label}]"));
-    let desc = match next {
-        Mode::Default => "Запрашивать подтверждение перед записью и командами",
-        Mode::AcceptEdits => "Автоматически разрешать правки файлов в рабочей папке",
-        Mode::Plan => "Только чтение и планирование (мутации заблокированы)",
-        Mode::Bypass => "Выполнять инструменты без запросов (явные deny сохраняются)",
-    };
-    let body = vec![
-        format!("Активный режим: [{}]", label),
-        format!("Описание: {desc}"),
-    ];
-    widgets::card("Режим доступа", &body, "shift+tab переключить", width)
+    status.permission = permission_label(next).into();
+    status.toast = None;
 }
 
 /// Render a transcript summary card of the conversation (`Ctrl+O`).
@@ -262,7 +255,7 @@ pub async fn execute_command(
         .unwrap_or((command, ""));
     let args = args.trim();
     let width = width.max(20);
-    let inner = width.saturating_sub(2).max(10);
+    let inner = width.saturating_sub(4).max(10);
     let glyphs = Glyphs::detect();
     let root = agent.tools.permissions.root.clone();
     let home = home_dir(&root);

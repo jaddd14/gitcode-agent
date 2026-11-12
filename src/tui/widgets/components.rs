@@ -288,12 +288,17 @@ pub fn card_with_glyphs(
     width: usize,
     glyphs: Glyphs,
 ) -> Vec<String> {
+    let padded = body
+        .iter()
+        .flat_map(|row| crate::tui::markdown::wrap(row, width.saturating_sub(4).max(1)))
+        .map(|row| format!(" {row}"))
+        .collect::<Vec<_>>();
     let mut rows = Frame {
         title,
         footer,
         glyphs,
     }
-    .render(body, width);
+    .render(&padded, width);
     rows.push(String::new());
     rows
 }

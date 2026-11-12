@@ -62,6 +62,7 @@ pub struct Editor {
     escaped: bool,
     completion_closed: bool,
     completion_selected: usize,
+    delete_repeats: usize,
 }
 impl Editor {
     /// Current full prompt, without display-only paste chips.
@@ -228,6 +229,13 @@ impl Editor {
         use KeyCode::*;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let deleting = matches!(key.code, Backspace | Delete);
+        if deleting && key.kind == KeyEventKind::Repeat {
+            self.delete_repeats = self.delete_repeats.saturating_add(1);
+        } else {
+            self.delete_repeats = 0;
+        }
+        let delete_count = 1 + (self.delete_repeats / 8).min(3);
         if self.completion_open() && !ctrl {
             let choices = super::commands::candidates(&self.text);
             let selected = self.completion_selected();
@@ -317,8 +325,16 @@ impl Editor {
             }
             Up | Char('p') if key.code == Up || ctrl => self.vertical(false),
             Down | Char('n') if key.code == Down || ctrl => self.vertical(true),
-            Backspace => self.replace(self.previous(), self.cursor, ""),
-            Delete => self.replace(self.cursor, self.next(), ""),
+            Backspace => {
+                for _ in 0..delete_count {
+                    self.replace(self.previous(), self.cursor, "");
+                }
+            }
+            Delete => {
+                for _ in 0..delete_count {
+                    self.replace(self.cursor, self.next(), "");
+                }
+            }
             Char('u') if ctrl => {
                 let start = self.text[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
                 self.replace(start, self.cursor, "");
@@ -395,27 +411,47 @@ impl Editor {
             cursor_col: 0,
         };
         let mut col = 0;
-        for (i, g) in display.grapheme_indices(true) {
-            let cells = UnicodeWidthStr::width(g);
-            if g != "\n" && col + cells > width && col > 0 {
+        let mut soft_wrap = false;
+        for (start, part) in display.split_word_bound_indices() {
+            if !part.chars().all(char::is_whitespace)
+                && col > 0
+                && col + UnicodeWidthStr::width(part) > width
+            {
                 view.lines.push(String::new());
                 col = 0;
+                soft_wrap = true;
             }
-            if i == display_cursor {
-                view.cursor_row = view.lines.len() - 1;
-                view.cursor_col = col;
-            }
-            if g == "\n" {
-                view.lines.push(String::new());
-                col = 0;
-            } else if cells <= width {
-                if let Some(line) = view.lines.last_mut() {
-                    line.push_str(g);
-                }
-                col += cells;
-                if col == width {
+            for (offset, g) in part.grapheme_indices(true) {
+                let cells = UnicodeWidthStr::width(g);
+                if g != "\n" && col + cells > width && col > 0 {
                     view.lines.push(String::new());
                     col = 0;
+                    soft_wrap = true;
+                }
+                if start + offset == display_cursor {
+                    view.cursor_row = view.lines.len() - 1;
+                    view.cursor_col = col;
+                }
+                if g == "\n" {
+                    view.lines.push(String::new());
+                    col = 0;
+                    soft_wrap = false;
+                } else {
+                    // A separator after an exact-width word belongs to the soft
+                    // break, not to the next row. Keep it in the source buffer.
+                    if soft_wrap && col == 0 && g.chars().all(char::is_whitespace) {
+                        continue;
+                    }
+                    soft_wrap = false;
+                    if let Some(line) = view.lines.last_mut() {
+                        line.push_str(if cells > width { "�" } else { g });
+                    }
+                    col += cells.min(width);
+                    if col == width {
+                        view.lines.push(String::new());
+                        col = 0;
+                        soft_wrap = true;
+                    }
                 }
             }
         }

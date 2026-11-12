@@ -10,7 +10,7 @@
 //! This is deliberately not CommonMark: blocks are physical lines, tables use
 //! equal-width columns, and fenced code has a flat color, not syntax highlighting.
 
-use crate::theme::{foreground, ColorMode, Theme};
+use crate::theme::{default_foreground, foreground, ColorMode, Theme};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -19,6 +19,10 @@ use unicode_width::UnicodeWidthStr;
 pub enum Role {
     /// Ordinary prose.
     Text,
+    /// Bold inline text.
+    Bold,
+    /// Emphasized inline text.
+    Italic,
     /// Heading text.
     Heading,
     /// List or quote marker.
@@ -162,6 +166,7 @@ pub struct Markdown {
     lines: Vec<Line>,
     fence: Option<(char, usize)>,
     table_columns: Option<usize>,
+    pending_continuation: bool,
 }
 impl Markdown {
     /// Construct an empty parser; no terminal or filesystem access is performed.
@@ -177,7 +182,7 @@ impl Markdown {
             if let Some(line) = part.strip_suffix('\n') {
                 self.pending.push_str(line);
                 let pending = std::mem::take(&mut self.pending);
-                self.parse_line(&pending);
+                self.parse_pending(&pending);
             } else {
                 self.pending.push_str(part);
             }
@@ -189,7 +194,7 @@ impl Markdown {
     pub fn finish(&mut self) {
         if !self.pending.is_empty() {
             let pending = std::mem::take(&mut self.pending);
-            self.parse_line(&pending);
+            self.parse_pending(&pending);
         }
         self.sanitizer = Sanitizer::default();
     }
@@ -197,6 +202,74 @@ impl Markdown {
     /// Completed parsed lines, excluding the provisional tail.
     pub fn lines(&self) -> &[Line] {
         &self.lines
+    }
+
+    /// Move completed, stable lines into scrollback, retaining the last line
+    /// because a following table delimiter can still change its interpretation.
+    pub fn drain_stable(
+        &mut self,
+        width: usize,
+        theme: &Theme,
+        mode: ColorMode,
+        target: usize,
+    ) -> Vec<String> {
+        let mut rows = self.render(width, theme, mode).len();
+        let mut count = 0;
+        let mut result = Vec::new();
+        while rows > target && count + 1 < self.lines.len() {
+            let mut end = count + 1;
+            if !self.lines[count].cells.is_empty() {
+                while end < self.lines.len() && !self.lines[end].cells.is_empty() {
+                    end += 1;
+                }
+                // Column widths depend on every row; an open table must stay mutable.
+                if end == self.lines.len() && self.table_columns.is_some() {
+                    break;
+                }
+            }
+            let rendered = render_lines(&self.lines[count..end], width, theme, mode);
+            rows = rows.saturating_sub(rendered.len());
+            result.extend(rendered);
+            count = end;
+        }
+        self.lines.drain(..count);
+        // Long unfinished paragraphs must not be trapped in the live viewport.
+        // Commit whole rows only after their inline markup is complete.
+        if rows > target
+            && self.lines.is_empty()
+            && self.fence.is_none()
+            && self.table_columns.is_none()
+            && !self.pending.contains('|')
+            && (self.pending_continuation || {
+                let trimmed = self.pending.trim_start();
+                !trimmed.starts_with(['#', '>', '`', '~']) && list_item(trimmed).is_none()
+            })
+        {
+            let all = wrap_prose(&inline(&self.pending), width);
+            let available = all.len().saturating_sub(target.max(1));
+            let mut best = None;
+            for (index, part) in self.pending.split_word_bound_indices() {
+                if index == 0 || part.chars().all(char::is_whitespace) {
+                    continue;
+                }
+                if !inline_complete(&self.pending[..index]) {
+                    continue;
+                }
+                let prefix = wrap_prose(&inline(&self.pending[..index]), width);
+                if prefix.len() > available {
+                    break;
+                }
+                if prefix.len() <= available && all.starts_with(&prefix) {
+                    best = Some((index, prefix));
+                }
+            }
+            if let Some((index, prefix)) = best {
+                result.extend(prefix.iter().map(|row| paint(row, theme, mode)));
+                self.pending.drain(..index);
+                self.pending_continuation = true;
+            }
+        }
+        result
     }
 
     /// Render a complete snapshot, including the provisional tail, to trusted
@@ -214,23 +287,41 @@ impl Markdown {
         let mut preview = Self {
             fence: self.fence,
             table_columns: self.table_columns,
+            pending_continuation: self.pending_continuation,
             ..Self::default()
         };
         // A provisional table delimiter may reclassify the last committed line.
-        let previous = self
+        let count = if self.lines.last().is_some_and(|line| !line.cells.is_empty()) {
+            let start = self
+                .lines
+                .iter()
+                .rposition(|line| line.cells.is_empty())
+                .map_or(0, |index| index + 1);
+            preview.lines.extend_from_slice(&self.lines[start..]);
+            start
+        } else if let Some(line) = self
             .lines
             .last()
-            .filter(|line| line.kind == Kind::Paragraph);
-        let count = if let Some(line) = previous {
+            .filter(|line| line.kind == Kind::Paragraph)
+        {
             preview.lines.push(line.clone());
             self.lines.len().saturating_sub(1)
         } else {
             self.lines.len()
         };
-        preview.parse_line(&self.pending);
+        preview.parse_pending(&self.pending);
         let mut rows = render_lines(&self.lines[..count], width, theme, mode);
         rows.extend(render_lines(&preview.lines, width, theme, mode));
         rows
+    }
+
+    fn parse_pending(&mut self, text: &str) {
+        if self.pending_continuation {
+            self.pending_continuation = false;
+            self.add(Kind::Paragraph, "", vec![span(text, Role::Text)], vec![]);
+        } else {
+            self.parse_line(text);
+        }
     }
 
     fn parse_line(&mut self, text: &str) {
@@ -368,11 +459,33 @@ fn list_item(text: &str) -> Option<(String, &str)> {
     None
 }
 
-fn inline(text: &str) -> Vec<Span> {
+pub(super) fn inline(text: &str) -> Vec<Span> {
     let mut out = Vec::new();
     let mut plain = String::new();
     let mut remaining = text;
     while !remaining.is_empty() {
+        let emphasis = if remaining.starts_with("**") {
+            Some(("**", Role::Bold))
+        } else if remaining.starts_with("__") {
+            Some(("__", Role::Bold))
+        } else if remaining.starts_with('*') {
+            Some(("*", Role::Italic))
+        } else if remaining.starts_with('_') {
+            Some(("_", Role::Italic))
+        } else {
+            None
+        };
+        if let Some((delimiter, role)) = emphasis {
+            let start = delimiter.len();
+            if let Some(end) = remaining[start..].find(delimiter).filter(|end| *end > 0) {
+                if !plain.is_empty() {
+                    out.push(span(&std::mem::take(&mut plain), Role::Text));
+                }
+                out.push(span(&remaining[start..start + end], role));
+                remaining = &remaining[start + end + start..];
+                continue;
+            }
+        }
         if remaining.starts_with('`') {
             let run = remaining.bytes().take_while(|b| *b == b'`').count();
             let delimiter = &remaining[..run];
@@ -408,6 +521,47 @@ fn inline(text: &str) -> Vec<Span> {
         out.push(span(&plain, Role::Text));
     }
     out
+}
+
+// A streamed prefix cannot be finalized while a delimiter may still close.
+fn inline_complete(mut text: &str) -> bool {
+    while !text.is_empty() {
+        let delimiter = if text.starts_with("**") {
+            Some("**")
+        } else if text.starts_with("__") {
+            Some("__")
+        } else if text.starts_with('*') {
+            Some("*")
+        } else if text.starts_with('_') {
+            Some("_")
+        } else {
+            None
+        };
+        if let Some(delimiter) = delimiter {
+            let start = delimiter.len();
+            let Some(end) = text[start..].find(delimiter).filter(|end| *end > 0) else {
+                return false;
+            };
+            text = &text[start + end + start..];
+        } else if text.starts_with('`') {
+            let run = text.bytes().take_while(|b| *b == b'`').count();
+            let Some(end) = text[run..].find(&text[..run]) else {
+                return false;
+            };
+            text = &text[run + end + run..];
+        } else if text.starts_with('[') {
+            let Some(label_end) = text.find("](") else {
+                return false;
+            };
+            let Some(end) = text[label_end + 2..].find(')') else {
+                return false;
+            };
+            text = &text[label_end + 3 + end..];
+        } else if let Some(ch) = text.chars().next() {
+            text = &text[ch.len_utf8()..];
+        }
+    }
+    true
 }
 
 fn split_cells(text: &str) -> Option<Vec<String>> {
@@ -485,6 +639,22 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
         .collect()
 }
 
+/// Sanitize and wrap text at word boundaries, splitting only oversized words.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    Sanitizer::default()
+        .push(text)
+        .split('\n')
+        .flat_map(|line| {
+            wrap_prose(&[span(line, Role::Text)], width)
+                .into_iter()
+                .map(|row| row.into_iter().map(|s| s.text).collect::<String>())
+        })
+        .collect()
+}
+
 fn wrap_spans(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
     let mut rows: Vec<Vec<Span>> = vec![Vec::new()];
     let mut used = 0;
@@ -516,6 +686,82 @@ fn wrap_spans(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
     rows
 }
 
+// Prefer word boundaries for prose while preserving graphemes and span styles.
+fn wrap_prose(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
+    let mut rows: Vec<Vec<Span>> = vec![Vec::new()];
+    let mut used = 0;
+    let mut parts: Vec<Vec<(&str, Role)>> = Vec::new();
+    for s in spans {
+        for grapheme in s.text.graphemes(true) {
+            let whitespace = grapheme.chars().all(char::is_whitespace);
+            if parts
+                .last()
+                .is_none_or(|part| part[0].0.chars().all(char::is_whitespace) != whitespace)
+            {
+                parts.push(Vec::new());
+            }
+            if let Some(part) = parts.last_mut() {
+                part.push((grapheme, s.role));
+            }
+        }
+    }
+    for part in parts {
+        let size = part
+            .iter()
+            .map(|(text, _)| UnicodeWidthStr::width(*text))
+            .sum::<usize>();
+        let whitespace = part[0].0.chars().all(char::is_whitespace);
+        if used > 0 && !whitespace && used + size > width {
+            rows.push(Vec::new());
+            used = 0;
+        }
+        let suffix_start = part.iter().rposition(|(text, _)| {
+            !text
+                .chars()
+                .all(|c| ".,;:!?…)]}»”’。！？、，；：".contains(c))
+        });
+        let tail = suffix_start.map(|index| {
+            (
+                index,
+                part[index..]
+                    .iter()
+                    .map(|(text, _)| UnicodeWidthStr::width(*text))
+                    .sum::<usize>(),
+            )
+        });
+        for (index, (grapheme, role)) in part.into_iter().enumerate() {
+            let mut text = grapheme;
+            let mut cells = UnicodeWidthStr::width(grapheme);
+            if cells > width {
+                text = "�";
+                cells = 1;
+            }
+            if tail.is_some_and(|(start, size)| {
+                index == start && size <= width && used > 0 && used + size > width
+            }) {
+                rows.push(Vec::new());
+                used = 0;
+            }
+            if used + cells > width {
+                if whitespace {
+                    continue;
+                }
+                rows.push(Vec::new());
+                used = 0;
+            }
+            if let Some(row) = rows.last_mut() {
+                if let Some(last) = row.last_mut().filter(|last| last.role == role) {
+                    last.text.push_str(text);
+                } else {
+                    row.push(span(text, role));
+                }
+            }
+            used += cells;
+        }
+    }
+    rows
+}
+
 fn paint(spans: &[Span], theme: &Theme, mode: ColorMode) -> String {
     let mut out = String::new();
     for s in spans {
@@ -523,12 +769,24 @@ fn paint(spans: &[Span], theme: &Theme, mode: ColorMode) -> String {
             out.push_str(&s.text);
             continue;
         }
-        let color = match s.role {
-            Role::Text => theme.text,
-            Role::Heading | Role::Marker | Role::Link => theme.rose,
-            Role::Code | Role::Muted => theme.text,
-        };
-        out.push_str(&foreground(color, mode));
+        match s.role {
+            Role::Text | Role::Bold => out.push_str(default_foreground(mode)),
+            Role::Italic => out.push_str(&foreground(theme.rose_soft, mode)),
+            Role::Heading | Role::Marker | Role::Link => {
+                out.push_str(&foreground(theme.rose, mode))
+            }
+            Role::Code => out.push_str(&foreground(theme.ok, mode)),
+            Role::Muted => out.push_str(&foreground(theme.placeholder, mode)),
+        }
+        if matches!(s.role, Role::Bold | Role::Heading) {
+            out.push_str("\x1b[1m");
+        }
+        if s.role == Role::Italic {
+            out.push_str("\x1b[3m");
+        }
+        if s.role == Role::Link {
+            out.push_str("\x1b[4m");
+        }
         out.push_str(&s.text);
         out.push_str("\x1b[0m");
     }
@@ -537,11 +795,38 @@ fn paint(spans: &[Span], theme: &Theme, mode: ColorMode) -> String {
 
 fn render_lines(lines: &[Line], width: usize, theme: &Theme, mode: ColorMode) -> Vec<String> {
     let mut out = Vec::new();
-    for line in lines {
+    let mut index = 0;
+    while index < lines.len() {
+        let line = &lines[index];
         if !line.cells.is_empty() {
-            render_table(line, width, theme, mode, &mut out);
+            let mut end = index + 1;
+            while end < lines.len() && !lines[end].cells.is_empty() {
+                end += 1;
+            }
+            let group = &lines[index..end];
+            let widths = table_widths(group, width);
+            for (row_index, item) in group.iter().enumerate() {
+                render_table(item, width, &widths, theme, mode, &mut out);
+                if item.kind == Kind::TableRow {
+                    let rule = Line {
+                        kind: Kind::TableRule,
+                        prefix: String::new(),
+                        spans: Vec::new(),
+                        cells: vec![vec![]; item.cells.len()],
+                    };
+                    let start = out.len();
+                    render_table(&rule, width, &widths, theme, mode, &mut out);
+                    if row_index + 1 == group.len() {
+                        for row in &mut out[start..] {
+                            *row = row.replace('┼', "┴");
+                        }
+                    }
+                }
+            }
+            index = end;
             continue;
         }
+        index += 1;
         let prefix = wrap(&line.prefix, width)
             .into_iter()
             .next()
@@ -564,13 +849,25 @@ fn render_lines(lines: &[Line], width: usize, theme: &Theme, mode: ColorMode) ->
         } else {
             line.spans.clone()
         };
-        for (index, row) in wrap_spans(&spans, width - prefix_width).iter().enumerate() {
+        let wrapped = if matches!(
+            line.kind,
+            Kind::Paragraph | Kind::Heading(_) | Kind::List | Kind::Quote
+        ) {
+            wrap_prose(&spans, width - prefix_width)
+        } else {
+            wrap_spans(&spans, width - prefix_width)
+        };
+        for (index, row) in wrapped.iter().enumerate() {
             let marker = if index == 0 {
                 prefix.clone()
             } else {
                 " ".repeat(prefix_width)
             };
-            let mut rendered = paint(&[span(&marker, Role::Marker)], theme, mode);
+            let mut rendered = if marker.is_empty() {
+                String::new()
+            } else {
+                paint(&[span(&marker, Role::Marker)], theme, mode)
+            };
             rendered.push_str(&paint(row, theme, mode));
             out.push(rendered);
         }
@@ -578,10 +875,47 @@ fn render_lines(lines: &[Line], width: usize, theme: &Theme, mode: ColorMode) ->
     out
 }
 
-fn render_table(line: &Line, width: usize, theme: &Theme, mode: ColorMode, out: &mut Vec<String>) {
+// Keep tables compact, while giving longer columns more room and respecting the screen.
+fn table_widths(lines: &[Line], width: usize) -> Vec<usize> {
+    let columns = lines.first().map_or(0, |line| line.cells.len());
+    let mut widths = vec![1usize; columns];
+    for line in lines {
+        for (index, cell) in line.cells.iter().enumerate() {
+            let natural = cell
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.text.as_str()))
+                .sum::<usize>();
+            widths[index] = widths[index].max(natural.min(60));
+        }
+    }
+    let budget = width.saturating_sub(columns.saturating_sub(1) * 3);
+    while widths.iter().sum::<usize>() > budget {
+        let Some((index, value)) = widths.iter().enumerate().max_by_key(|(_, value)| *value) else {
+            break;
+        };
+        if *value <= 1 {
+            break;
+        }
+        widths[index] -= 1;
+    }
+    widths
+}
+
+fn render_table(
+    line: &Line,
+    width: usize,
+    widths: &[usize],
+    theme: &Theme,
+    mode: ColorMode,
+    out: &mut Vec<String>,
+) {
     let columns = line.cells.len();
     // Narrow terminals stack cells instead of overflowing with separators.
-    if columns.saturating_mul(2).saturating_sub(1) > width {
+    if columns.saturating_mul(4).saturating_sub(1) > width {
+        if line.kind == Kind::TableRule {
+            out.push(paint(&[span(&"─".repeat(width), Role::Muted)], theme, mode));
+            return;
+        }
         for cell in &line.cells {
             for row in wrap_spans(cell, width) {
                 out.push(paint(&row, theme, mode));
@@ -589,10 +923,6 @@ fn render_table(line: &Line, width: usize, theme: &Theme, mode: ColorMode, out: 
         }
         return;
     }
-    let budget = width - (columns - 1);
-    let widths = (0..columns)
-        .map(|i| budget / columns + usize::from(i < budget % columns))
-        .collect::<Vec<_>>();
     if line.kind == Kind::TableRule {
         out.push(paint(
             &[span(
@@ -600,7 +930,7 @@ fn render_table(line: &Line, width: usize, theme: &Theme, mode: ColorMode, out: 
                     .iter()
                     .map(|w| "─".repeat(*w))
                     .collect::<Vec<_>>()
-                    .join("┼"),
+                    .join("─┼─"),
                 Role::Muted,
             )],
             theme,
@@ -611,15 +941,15 @@ fn render_table(line: &Line, width: usize, theme: &Theme, mode: ColorMode, out: 
     let cells = line
         .cells
         .iter()
-        .zip(&widths)
-        .map(|(cell, w)| wrap_spans(cell, *w))
+        .zip(widths)
+        .map(|(cell, w)| wrap_prose(cell, *w))
         .collect::<Vec<_>>();
     let height = cells.iter().map(Vec::len).max().unwrap_or(1);
     for row in 0..height {
         let mut spans = Vec::new();
         for (column, cell) in cells.iter().enumerate() {
             if column > 0 {
-                spans.push(span("│", Role::Muted));
+                spans.push(span(" │ ", Role::Muted));
             }
             let content = cell.get(row).cloned().unwrap_or_default();
             let used = content

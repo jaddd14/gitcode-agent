@@ -40,7 +40,7 @@ fn cells(row: &str) -> Vec<(char, Option<Rgb>)> {
                             code.split(';').filter_map(|v| v.parse().ok()).collect();
                         if values.starts_with(&[38, 2]) && values.len() == 5 {
                             color = Some(Rgb(values[2], values[3], values[4]));
-                        } else if values == [0] {
+                        } else if values == [0] || values == [39] {
                             color = None;
                         }
                     }
@@ -75,15 +75,24 @@ fn assert_frame_rows(rows: &[String], theme: &Theme) {
         if plain.starts_with('╭') && plain.ends_with('╮') {
             in_frame = true;
             right_col = Some(buffer.len() - 1);
-            assert_eq!(buffer[0], ('╭', Some(theme.rose)), "{plain}");
             assert_eq!(
                 buffer.last().copied(),
-                Some(('╮', Some(theme.rose))),
+                Some(('╮', Some(theme.border))),
                 "{plain}"
             );
-            for (c, color) in &buffer {
+            let accent_top = buffer
+                .iter()
+                .skip(1)
+                .take(buffer.len().saturating_sub(2))
+                .all(|(ch, _)| matches!(ch, '─' | '-'));
+            for (position, (c, color)) in buffer.iter().enumerate() {
                 if matches!(c, '╭' | '╮' | '─') {
-                    assert_eq!(*color, Some(theme.rose), "top border glyph in {plain}");
+                    let expected = if accent_top && position < 4 {
+                        theme.rose
+                    } else {
+                        theme.border
+                    };
+                    assert_eq!(*color, Some(expected), "top border glyph in {plain}");
                 }
             }
         } else if plain.starts_with('╰') && plain.ends_with('╯') {
@@ -93,17 +102,17 @@ fn assert_frame_rows(rows: &[String], theme: &Theme) {
                 right_col,
                 "misaligned bottom right in {plain}"
             );
-            assert_eq!(buffer[0], ('╰', Some(theme.rose)), "{plain}");
             assert_eq!(
                 buffer.last().copied(),
-                Some(('╯', Some(theme.rose))),
+                Some(('╯', Some(theme.border))),
                 "{plain}"
             );
-            for (c, color) in &buffer {
-                if matches!(c, '╰' | '╯' | '─') {
-                    assert_eq!(*color, Some(theme.rose), "bottom border glyph in {plain}");
-                }
-            }
+            let left_corner = if plain.contains("shift+tab") {
+                theme.rose
+            } else {
+                theme.border
+            };
+            assert_eq!(buffer[0], ('╰', Some(left_corner)), "{plain}");
             in_frame = false;
             right_col = None;
         } else if in_frame {
@@ -114,8 +123,8 @@ fn assert_frame_rows(rows: &[String], theme: &Theme) {
             );
             assert_eq!(
                 buffer.last().copied(),
-                Some(('│', Some(theme.rose))),
-                "right border must be rose on interior row: {plain}"
+                Some(('│', Some(theme.border))),
+                "right border must be neutral on interior row: {plain}"
             );
             if plain.starts_with(" › ") {
                 assert_eq!(buffer[0].0, ' ', "column 0 gap on chevron row: {plain}");
@@ -126,10 +135,22 @@ fn assert_frame_rows(rows: &[String], theme: &Theme) {
                 );
                 assert_eq!(buffer[2].0, ' ', "column 2 space after chevron: {plain}");
             } else {
+                let info_row = [
+                    "Model    :",
+                    "Session  :",
+                    "Cache    :",
+                    "Speed    :",
+                    "Output   :",
+                    "Context  :",
+                    "Working  :",
+                    "Tools    :",
+                ]
+                .iter()
+                .any(|label| plain.contains(label));
                 assert_eq!(
                     buffer[0],
-                    ('│', Some(theme.rose)),
-                    "left border must be rose at column 0: {plain}"
+                    ('│', Some(if info_row { theme.rose } else { theme.border })),
+                    "left border color at column 0: {plain}"
                 );
             }
         }
@@ -151,11 +172,11 @@ fn prompt_chrome_and_text_are_colored_independently() {
                 let buffer = cells(&styled);
                 if row.starts_with(" › ") {
                     let expected = if input.is_empty() {
-                        theme.rose_soft
+                        Some(theme.placeholder)
                     } else {
-                        theme.text
+                        None
                     };
-                    assert_eq!(buffer[3].1, Some(expected));
+                    assert_eq!(buffer[3].1, expected);
                 }
             }
             let mut renderer = Renderer::new(Vec::new(), width + 1, 36, ColorMode::TrueColor, true);

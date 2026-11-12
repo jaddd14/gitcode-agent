@@ -63,11 +63,11 @@ impl RosePreset {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum WhiteMode {
-    /// Slightly softened white.
-    #[default]
-    Soft,
     /// Full-intensity white.
+    #[default]
     Pure,
+    /// Slightly softened white.
+    Soft,
 }
 
 /// Serializable user palette preference.
@@ -80,7 +80,7 @@ pub struct ThemeChoice {
     pub white: WhiteMode,
 }
 
-static ACTIVE: AtomicU8 = AtomicU8::new(0);
+static ACTIVE: AtomicU8 = AtomicU8::new(4);
 
 /// Read the process-local palette preference without accessing configuration.
 pub fn active_choice() -> ThemeChoice {
@@ -115,6 +115,8 @@ pub struct Theme {
     pub bg: Rgb,
     /// Raised panel background.
     pub panel: Rgb,
+    /// Muted text used inside the compact status panel.
+    pub panel_text: Rgb,
     /// Panel hover / subtle highlight background.
     pub panel_hover: Rgb,
     /// Selection row background.
@@ -129,8 +131,10 @@ pub struct Theme {
     pub rose_soft: Rgb,
     /// Main text and metadata.
     pub text: Rgb,
-    /// Success indicator.
+    /// Success and output-counter color.
     pub ok: Rgb,
+    /// Muted prompt placeholder text.
+    pub placeholder: Rgb,
     /// Warning indicator.
     pub warn: Rgb,
     /// Error indicator.
@@ -153,10 +157,11 @@ impl Theme {
         let rose = choice.preset.color();
         Self {
             bg: Rgb(20, 17, 19),
-            panel: Rgb(29, 24, 27),
+            panel: Rgb(12, 10, 12),
+            panel_text: Rgb(171, 169, 174),
             panel_hover: Rgb(42, 31, 36),
             selection: Rgb(57, 35, 44),
-            border: Rgb(87, 52, 66),
+            border: Rgb(68, 66, 70),
             rose,
             rose_soft: shift_hsl(rose, -0.05, 0.12),
             rose_deep: shift_hsl(rose, 0.0, -0.18),
@@ -164,7 +169,8 @@ impl Theme {
                 WhiteMode::Soft => Rgb(237, 233, 235),
                 WhiteMode::Pure => Rgb(255, 255, 255),
             },
-            ok: Rgb(123, 211, 137),
+            ok: Rgb(78, 187, 137),
+            placeholder: Rgb(85, 84, 82),
             warn: Rgb(244, 201, 93),
             error: Rgb(255, 92, 122),
             diff_add_bg: Rgb(22, 43, 34),
@@ -281,6 +287,15 @@ pub fn background(color: Rgb, mode: ColorMode) -> String {
             format!("\x1b[{}m", if n < 8 { 40 + n } else { 100 + n - 8 })
         }
         ColorMode::None => String::new(),
+    }
+}
+
+/// Restore the terminal's default foreground without changing other attributes.
+pub fn default_foreground(mode: ColorMode) -> &'static str {
+    if mode == ColorMode::None {
+        ""
+    } else {
+        "\x1b[39m"
     }
 }
 

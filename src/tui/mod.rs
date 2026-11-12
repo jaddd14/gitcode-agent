@@ -14,6 +14,7 @@ pub mod term;
 pub mod theme_picker;
 pub mod tool_card;
 pub mod usage_panel;
+mod viewport;
 pub mod widgets;
 
 /// Remove terminal control characters from untrusted display text.

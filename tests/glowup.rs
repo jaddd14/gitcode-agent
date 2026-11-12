@@ -190,17 +190,15 @@ fn busy_activity_and_retry_notice_render_above_prompt_box() {
         busy: true,
         elapsed_secs: 9,
         output: 1400,
+        turn_output: 1400,
         queued: 2,
         retry_notice: Some("Лимит запросов. Повтор через 4с (попытка 2 из 5)".into()),
         ..Status::default()
     };
     let frame = Frame::input(&editor, &status, 80, 24);
     assert!(frame.lines[0].starts_with('▲'));
-    assert!(frame.lines[1].contains("Колдую… (9с · ↓ 1.4k токенов)"));
-    assert!(frame
-        .lines
-        .iter()
-        .any(|l| l.contains("[esc] отменить · в очереди: 2")));
+    assert!(frame.lines[1].contains("Думаю… (9с · ↓ 1.4k токенов)"));
+    assert!(!frame.lines.iter().any(|l| l.contains("В очереди")));
     assert!(frame.lines.iter().all(|l| l.width() <= 80));
 }
 

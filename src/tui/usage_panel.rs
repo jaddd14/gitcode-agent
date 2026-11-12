@@ -33,7 +33,7 @@ pub fn render(
         .cloned()
         .collect::<Vec<_>>();
     let summary = UsageSummary::from_entries(&filtered);
-    let inner = width.saturating_sub(2);
+    let inner = width.saturating_sub(4);
     let mut body = wrap_text(&tabs(&PERIODS, period, usize::MAX), inner);
     if filtered.is_empty() {
         for line in [

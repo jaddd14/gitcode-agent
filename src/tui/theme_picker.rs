@@ -25,13 +25,13 @@ fn rows(choice: ThemeChoice, selected: usize, width: usize) -> Vec<String> {
     }
     body.push(String::new());
     body.push(format!(
-        "Белый текст: {}",
+        "Белый в diff: {}",
         match choice.white {
             WhiteMode::Soft => "мягкий",
             WhiteMode::Pure => "чистый",
         }
     ));
-    body.push("↑↓ тема · tab/←→ белый · enter сохранить · esc отмена".into());
+    body.push("↑↓ тема · tab/←→ белый в diff · enter сохранить · esc отмена".into());
     body.into_iter()
         .map(|line| widgets::fit(&line, width))
         .collect()
@@ -99,7 +99,12 @@ mod tests {
         for preset in RosePreset::ALL {
             assert!(body.contains(preset.label()));
         }
-        assert!(body.contains("мягкий"));
+        assert!(body.contains("чистый"));
+        let soft = ThemeChoice {
+            white: WhiteMode::Soft,
+            ..ThemeChoice::default()
+        };
+        assert!(rows(soft, 0, 100).join("\n").contains("мягкий"));
         let pure = ThemeChoice {
             white: WhiteMode::Pure,
             ..ThemeChoice::default()

@@ -1,7 +1,9 @@
 //! Original flat sakura bitmap and bundled, network-free startup header.
 
-use super::clip;
-use crate::theme::{foreground, ColorMode, Rgb, Theme};
+use crate::{
+    theme::{foreground, ColorMode, Rgb, Theme},
+    tui::{statusbar::Status, widgets},
+};
 
 /// Original 16 by 12 sakura sprite: transparent, deep pink, pink, soft pink, text.
 pub const SAKURA: [&str; 12] = [
@@ -18,8 +20,58 @@ pub const SAKURA: [&str; 12] = [
     "  2222    2222  ",
     "   11      11   ",
 ];
-/// Extra blank rows between header and input.
-pub const HEADER_GAP: usize = 3;
+/// One blank row between the status panel and input composer.
+pub const HEADER_GAP: usize = 1;
+/// Maximum status panel width from the reference layout.
+pub const INFO_PANEL_WIDTH: usize = 96;
+const PANEL_LEFT_WIDTH: usize = 26;
+/// Logo width in terminal cells for the inline graphics fallback.
+pub const LOGO_COLUMNS: usize = 10;
+/// Logo height in terminal cells for the inline graphics fallback.
+pub const LOGO_ROWS: usize = 5;
+/// Number of interior rows in the wide information panel.
+pub const INFO_PANEL_ROWS: usize = 14;
+/// Logo's zero-based column inside the information panel.
+pub const LOGO_COLUMN: usize = 1 + (PANEL_LEFT_WIDTH - LOGO_COLUMNS) / 2;
+/// Logo width in source pixels.
+pub const LOGO_PIXEL_WIDTH: usize = 90;
+/// Logo height in source pixels.
+pub const LOGO_PIXEL_HEIGHT: usize = 77;
+/// Cropped, transparent logo supplied with the reference design.
+pub const LOGO_PNG: &[u8] = include_bytes!("gitcode-logo.png");
+// Compact text emblem based on the user-provided winged reference, with G at its center.
+const WINGED_G: [&str; 14] = [
+    "      ⢀⣄⣂⡆⢠⣐⣢ ⣆⣢⣀",
+    "  ⣀⣠⡤⢬⣭⣭⣭⣵⡌⠙⠋⣤⣭⣭⣭⣭⠤⣤⣀⡀",
+    "⠐⠿⠿⢉⣠⡾⠉⠟⠁⠙⠇⠸⠁⠽⠁⠈⠯⠙⣧⣌⡙⠿⠷",
+    "   ⠈⠁    ⠒⠒⠂⠐⠒⠂    ⠉⠁",
+    "        ⣠⣴⣾⡿⠿⢿⣷⡆",
+    "       ⢰⣿⣿⠁    ⠁",
+    "       ⢸⣿⣿  ⠿⢿⣿⡇",
+    "        ⠻⣿⣷⣦⣤⣼⣿⡇",
+    "          ⠉⠉⠉⠉⠁",
+    "         ⠉⠩⣤⣀⠉⠁",
+    "           ⢀⡉",
+    "         ⢠⠔⢀⠉⢤⡄",
+    "         ⠈⢄⠨ ⡌⠁",
+    "          ⠈⠠⠉",
+];
+const WINGED_G_ASCII: [&str; 14] = [
+    "      .:::.  .:::.      ",
+    "  ..:::::::. .:::::::.. ",
+    " .::'  '..'   '..'  '::.",
+    "          ...           ",
+    "        .:::::.         ",
+    "       ::'   `:         ",
+    "       ::  .:::         ",
+    "       `::.  ::         ",
+    "        `:::::'         ",
+    "         .::.           ",
+    "          ::            ",
+    "         :  :           ",
+    "          ::            ",
+    "          '             ",
+];
 /// Bundled news; remote fetching is deliberately outside the startup path.
 pub const NEWS: [&str; 2] = [
     "Новое: терминальный интерфейс",
@@ -84,101 +136,133 @@ pub fn mascot(theme: &Theme, mode: ColorMode) -> Vec<String> {
         .collect()
 }
 impl Header<'_> {
-    /// Compose metadata and news to the right of the mascot, stacking on narrow screens.
+    /// Render a static initial panel, suitable for snapshots and noninteractive output.
     pub fn lines(&self, width: usize, theme: &Theme, mode: ColorMode) -> Vec<String> {
-        let width = width.min(100);
+        let status = Status {
+            model: self.model.into(),
+            branch: self.branch.into(),
+            ..Status::default()
+        };
+        let mut rows = self.live_lines(width, &status);
+        if mode != ColorMode::None {
+            rows = rows
+                .iter()
+                .map(|row| widgets::style_frame_row_with_panel(row, theme, mode, false))
+                .collect();
+        }
+        rows
+    }
+
+    /// Render the command catalog above the prompt composer.
+    pub fn live_lines(&self, width: usize, status: &Status) -> Vec<String> {
+        self.live_lines_for_size(width, status, usize::MAX)
+    }
+
+    /// Keep the emblem compact and fit the panel to the terminal height.
+    pub fn live_lines_for_size(
+        &self,
+        width: usize,
+        _status: &Status,
+        height: usize,
+    ) -> Vec<String> {
+        let width = width.min(INFO_PANEL_WIDTH);
         if width < 4 {
-            return vec![clip(
-                &format!("gitcode {} · {}", self.version, self.model),
-                width,
-            )];
+            return vec![String::new()];
         }
         let glyphs = super::widgets::Glyphs::detect();
-        let info = vec![
-            format!("Модель     {}", self.model),
-            format!("Провайдер  {}", self.provider),
-            "Режим      DEFAULT".into(),
-            format!("Папка      {}", self.cwd),
-            format!("Ветка      {}", self.branch),
-            String::new(),
-            "Новое".into(),
-            "+ Локальные инструменты и сессии".into(),
-            "+ Три протокола провайдера".into(),
-        ];
-        let logo = if width >= 64 && !glyphs.ascii {
-            mascot(theme, ColorMode::None)
+        let inner_width = width.saturating_sub(2);
+        let body = if inner_width < 72 || height < INFO_PANEL_ROWS + 8 {
+            vec![
+                widgets::fit("/help — список команд", inner_width),
+                widgets::fit("/model — выбрать модель", inner_width),
+                widgets::fit("/context — состав контекста", inner_width),
+                widgets::fit("/permissions — режим доступа", inner_width),
+            ]
         } else {
-            vec![]
-        };
-        let content_width = width.saturating_sub(6);
-        let mut body = info
-            .into_iter()
-            .enumerate()
-            .map(|(i, text)| {
-                let content = if logo.is_empty() {
-                    text
-                } else {
+            let left_width = PANEL_LEFT_WIDTH;
+            let columns = inner_width.saturating_sub(left_width + 6);
+            let middle_width = columns.div_ceil(2) + 2;
+            let right_width = columns.saturating_sub(middle_width);
+            let middle = [
+                "СЕССИЯ И КОНТЕКСТ",
+                "/help — список команд",
+                "/clear — новый диалог",
+                "/compact — сжать контекст",
+                "/config — настройки",
+                "/model — выбрать модель",
+                "/provider — провайдер модели",
+                "/usage — расход токенов",
+                "/cost — стоимость сессии",
+                "/status — статус проекта",
+                "/context — состав контекста",
+                "/resume — открыть сессию",
+                "/rewind — откатить шаг",
+                "/plan — режим планирования",
+            ];
+            let right = [
+                "ПРОЕКТ И ИНСТРУМЕНТЫ",
+                "/permissions — режим доступа",
+                "/agents — список агентов",
+                "/mcp — MCP-серверы",
+                "/init — инструкции проекта",
+                "/review — обзор изменений",
+                "/diff — показать diff",
+                "/commit — подготовить коммит",
+                "/memory — память проекта",
+                "/doctor — диагностика",
+                "/theme — цветовая тема",
+                "/vim — Vim-клавиши",
+                "/export — сохранить диалог",
+                "/copy — скопировать ответ",
+            ];
+            let divider = if glyphs.ascii { " | " } else { " │ " };
+            let blank_divider = "   ";
+            let emblem = if glyphs.ascii {
+                &WINGED_G_ASCII
+            } else {
+                &WINGED_G
+            };
+            (0..INFO_PANEL_ROWS)
+                .map(|row| {
+                    let row_divider = if (4..9).contains(&row) {
+                        divider
+                    } else {
+                        blank_divider
+                    };
                     format!(
-                        "{}  {text}",
-                        super::widgets::fit(logo.get(i).map(String::as_str).unwrap_or(""), 16)
-                    )
-                };
-                format!("  {}  ", super::widgets::fit(&content, content_width))
-            })
-            .collect::<Vec<_>>();
-        body.push(format!(
-            "  {}  ",
-            super::widgets::divider(content_width, glyphs)
-        ));
-        body.push(format!(
-            "  {}  ",
-            super::widgets::fit(
-                "Совет: Shift+Enter — новая строка; / — команды",
-                content_width
-            )
-        ));
-        let title = format!(
-            "{}gitcode {}",
-            if glyphs.ascii { "" } else { "✿ " },
-            self.version
-        );
-        let mut rows = super::widgets::Frame {
-            title: &title,
-            footer: "",
-            glyphs,
-        }
-        .render(&body, width);
-        rows = super::widgets::style_frame_rows(&rows, theme, mode);
-        if mode != ColorMode::None {
-            let colored_logo = mascot(theme, mode);
-            for (index, row) in rows.iter_mut().enumerate() {
-                if let Some(logo_row) = index.checked_sub(1).and_then(|i| logo.get(i)) {
-                    if let Some(colored) = index.checked_sub(1).and_then(|i| colored_logo.get(i)) {
-                        *row = row.replacen(
-                            logo_row,
-                            &format!("{colored}{}", foreground(theme.text, mode)),
-                            1,
-                        );
-                    }
-                }
-                if index == 3 {
-                    *row = row.replacen(
-                        "DEFAULT",
-                        &format!(
-                            "{}{}DEFAULT{}{}",
-                            foreground(theme.text, mode),
-                            crate::theme::background(theme.rose_deep, mode),
-                            crate::theme::reset(mode),
-                            foreground(theme.text, mode),
+                        "{}{}{}{}{}",
+                        widgets::fit(
+                            &center(&widgets::fit(emblem[row], 24), left_width),
+                            left_width
                         ),
-                        1,
-                    );
-                }
-            }
-        }
+                        row_divider,
+                        widgets::fit(middle[row], middle_width),
+                        row_divider,
+                        widgets::fit(right[row], right_width),
+                    )
+                })
+                .collect()
+        };
+        // Render the columns directly, without a title or outer frame.
+        let mut rows = body
+            .iter()
+            .map(|line| format!(" {} ", widgets::fit(line, inner_width)))
+            .collect::<Vec<_>>();
         rows.extend(std::iter::repeat_n(String::new(), HEADER_GAP));
         rows
     }
+}
+
+fn center(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let text_width = text.width().min(width);
+    let left = width.saturating_sub(text_width) / 2;
+    format!(
+        "{}{}{}",
+        " ".repeat(left),
+        text,
+        " ".repeat(width - left - text_width)
+    )
 }
 
 #[cfg(test)]
@@ -187,7 +271,7 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     #[test]
-    fn header_closes_at_a_constant_column_with_inner_footer() {
+    fn header_closes_at_a_constant_column_with_command_descriptions() {
         let header = Header {
             version: "0.2.0",
             model: "очень длинная модель 界",
@@ -207,14 +291,39 @@ mod tests {
             let rows = &rows[..rows.len() - HEADER_GAP];
             for row in rows {
                 let row = crate::tui::widgets::unstyled(row);
-                assert_eq!(row.width(), width.min(100), "{row}");
+                assert_eq!(row.width(), width.min(INFO_PANEL_WIDTH), "{row}");
             }
-            let tip = crate::tui::widgets::unstyled(&rows[rows.len() - 2]);
-            assert!(tip.starts_with("│  Совет") || tip.starts_with("|  Совет"));
-            let divider = crate::tui::widgets::unstyled(&rows[rows.len() - 3]);
-            assert!(divider.contains("────") || divider.contains("----"));
+            assert!(rows.iter().any(|row| row.contains("/help")));
+            assert!(rows.iter().any(|row| row.contains("/permissions")));
+            assert!(!rows.iter().any(|row| row.contains("gitcode v")));
             assert!(!rows.join("\n").contains("[DEFAULT]"));
         }
+    }
+
+    #[test]
+    fn emblem_is_compact_and_does_not_fill_the_background() {
+        let header = Header {
+            version: "0.2.1",
+            model: "test",
+            provider: "test",
+            cwd: ".",
+            branch: "main",
+        };
+        let theme = Theme::default();
+        let rows = header.lines(130, &theme, ColorMode::TrueColor);
+        let fill = crate::theme::background(theme.panel, ColorMode::TrueColor);
+        assert_eq!(rows.len(), INFO_PANEL_ROWS + HEADER_GAP);
+        assert!(rows.iter().all(|row| !row.contains(&fill)));
+        assert!(rows
+            .iter()
+            .any(|row| row.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c))));
+        assert!(WINGED_G_ASCII.iter().all(|row| row.is_ascii()));
+        let status = Status {
+            model: "test".into(),
+            branch: "main".into(),
+            ..Status::default()
+        };
+        assert!(header.live_lines_for_size(95, &status, 18).len() < rows.len());
     }
 
     #[test]
@@ -251,7 +360,7 @@ mod style_tests {
     use unicode_width::UnicodeWidthStr;
 
     #[test]
-    fn header_keeps_closed_constant_width_and_padded_tip() {
+    fn header_keeps_closed_constant_width_and_status_columns() {
         let path = "/very/long/path/".repeat(20);
         let header = Header {
             version: "0.1.0",
@@ -264,14 +373,23 @@ mod style_tests {
             for mode in [ColorMode::None, ColorMode::TrueColor, ColorMode::Ansi16] {
                 let rows = header.lines(width, &Theme::default(), mode);
                 let rows = &rows[..rows.len() - HEADER_GAP];
-                assert!(rows.iter().all(|row| plain(row).width() == width.min(100)));
-                for row in &rows[1..rows.len() - 1] {
+                assert!(rows
+                    .iter()
+                    .all(|row| plain(row).width() == width.min(INFO_PANEL_WIDTH)));
+                for row in rows {
                     let row = plain(row);
-                    assert!(row.starts_with("│  ") || row.starts_with("|  "));
-                    assert!(row.ends_with("  │") || row.ends_with("  |"));
+                    assert!(!row.starts_with(['╭', '╰', '│']));
+                    assert!(!row.ends_with(['╮', '╯', '│']));
                 }
-                let tip = plain(&rows[rows.len() - 2]);
-                assert!(tip.contains("Совет:"));
+                if width >= 74 {
+                    for (index, row) in rows.iter().enumerate() {
+                        let row = plain(row);
+                        let expected = if (4..9).contains(&index) { 2 } else { 0 };
+                        assert_eq!(row.matches('│').count(), expected, "{row}");
+                    }
+                }
+                assert!(rows.iter().any(|row| plain(row).contains("/model")));
+                assert!(rows.iter().any(|row| plain(row).contains("/context")));
                 assert!(!rows.iter().any(|row| row.contains("[DEFAULT]")));
             }
         }

@@ -47,6 +47,7 @@ impl Tools {
     /// Stable tool schemas used by all provider adapters.
     pub fn definitions() -> Vec<Tool> {
         vec![
+            tool("Agent", "Delegate an independent, clearly scoped task to a specialized subagent. Multiple independent Agent calls run concurrently. The subagent has its own context and returns its findings. Available types: explore (read-only research), plan (read-only planning), general-purpose (research and coding), plus configured custom agents. Provide all necessary context in prompt. Use only when delegation is useful.", json!({"description":{"type":"string","description":"Short task title"},"prompt":{"type":"string","description":"Self-contained task and relevant context"},"subagent_type":{"type":"string","description":"Agent profile name"}}), &["description","prompt","subagent_type"]),
             tool("McpCall", "Call an explicitly configured MCP server tool; execution permission is required.", json!({"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}}), &["server","tool","arguments"]),
             tool("WebFetch", "Fetch an explicitly authorized HTTP URL as untrusted text; network permission is required.", json!({"url":{"type":"string"}}), &["url"]),
             tool("Skill", "Load an installed skill by its registered name; its content does not override permission policy.", json!({"name":{"type":"string"}}), &["name"]),

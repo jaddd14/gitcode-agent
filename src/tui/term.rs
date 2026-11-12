@@ -5,9 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock, Weak};
 
 /// Startup control sequence; never enters an alternate screen or enables a mouse.
-pub const START: &str = "\x1b[2J\x1b[3J\x1b[H\x1b[?25l\x1b[?2004h";
+pub const START: &str = "\x1b[2J\x1b[3J\x1b[H\x1b[?25l\x1b[?2004h\x1b[>3u";
+/// Clear the visible terminal and its scrollback, then home the cursor.
+pub const CLEAR_SCREEN: &str = "\x1b[2J\x1b[3J\x1b[H";
 /// Reset synchronized output, Kitty keyboard stack, paste, style, and cursor.
-pub const RESTORE: &str = "\x1b[?2026l\x1b[<u\x1b[?2004l\x1b[0m\x1b[?25h";
+pub const RESTORE: &str = "\x1b[?1002l\x1b[?1006l\x1b[?2026l\x1b[<u\x1b[?2004l\x1b[0m\x1b[?25h";
 
 /// Injectable system boundary used by the guard and cleanup tests.
 pub trait TerminalBackend: Send + Sync {
