@@ -1,14 +1,19 @@
 //! Event-driven terminal foundation, independent of agent and provider orchestration.
 
 pub mod app;
+mod approval_picker;
+mod bypass_picker;
 pub mod commands;
 pub mod diff;
+pub mod effort_picker;
 pub mod header;
 pub mod input;
 pub mod intro;
 pub mod markdown;
 pub mod model_picker;
+mod picker;
 pub mod render;
+pub mod session_picker;
 pub mod statusbar;
 pub mod term;
 pub mod theme_picker;

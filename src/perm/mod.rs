@@ -128,6 +128,10 @@ impl Engine {
         }
     }
 
+    pub(crate) fn explicitly_asks(&self, tool: &str, resource: &str) -> bool {
+        self.ask.iter().any(|rule| rule.matches(tool, resource))
+    }
+
     /// Resolve an existing resource and reject symlink escapes from workspace.
     pub fn existing(&self, path: &Path) -> Result<PathBuf, String> {
         let path = if path.is_absolute() {

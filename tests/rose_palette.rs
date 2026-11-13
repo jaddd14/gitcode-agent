@@ -192,7 +192,7 @@ fn prompt_chrome_and_text_are_colored_independently() {
 async fn palette_audit_covers_header_cards_running_turn_retry_and_permissions() {
     let theme = Theme::default();
     let header = Header {
-        version: "0.2.1",
+        version: "0.2.2",
         model: "claude-opus-5-5",
         provider: "anthropic",
         cwd: "~/workspace",

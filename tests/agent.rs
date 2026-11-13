@@ -136,7 +136,7 @@ async fn interrupted_turn_keeps_request_completed_tools_and_marks_running_tool()
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut bytes = vec![0; 65536];
-        socket.read(&mut bytes).await.unwrap();
+        let _ = socket.read(&mut bytes).await.unwrap();
         let body = concat!(
             "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
             "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"read_1\",\"name\":\"Read\",\"input\":{\"path\":\"example.txt\"}}}\n\n",

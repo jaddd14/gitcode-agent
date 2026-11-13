@@ -51,6 +51,7 @@ pub struct Client {
     timeout: Duration,
     retry: Policy,
     protocol: Protocol,
+    effort: Option<String>,
 }
 
 impl Client {
@@ -99,7 +100,163 @@ impl Client {
             timeout,
             retry: Policy::default(),
             protocol,
+            effort: None,
         })
+    }
+
+    /// Set the requested reasoning effort for subsequent requests; `None` uses the provider default.
+    pub fn set_effort(&mut self, effort: Option<&str>) -> Result<(), &'static str> {
+        if effort.is_some_and(|value| !matches!(value, "low" | "medium" | "high" | "xhigh" | "max"))
+        {
+            return Err("unknown effort");
+        }
+        self.effort = effort.map(str::to_owned);
+        Ok(())
+    }
+
+    /// Currently selected reasoning effort, if explicitly set.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
+    }
+
+    /// Fetch every model advertised for the current endpoint and credential.
+    pub async fn list_models(&self) -> Result<Vec<String>, String> {
+        let prefix = match self.protocol {
+            Protocol::Anthropic => self.endpoint.strip_suffix("/messages"),
+            Protocol::OpenaiChat => self.endpoint.strip_suffix("/chat/completions"),
+            Protocol::OpenaiResponses => self.endpoint.strip_suffix("/responses"),
+        }
+        .ok_or("invalid provider endpoint")?;
+        let prefix = if !prefix.contains("/v1")
+            && reqwest::Url::parse(prefix)
+                .map_err(|_| "invalid provider endpoint")?
+                .path()
+                .trim_matches('/')
+                .is_empty()
+        {
+            format!("{prefix}/v1")
+        } else {
+            prefix.to_owned()
+        };
+        let initial = reqwest::Url::parse(&format!("{prefix}/models"))
+            .map_err(|_| "invalid models endpoint")?;
+        let mut next = initial.clone();
+        let mut visited = std::collections::HashSet::new();
+        let mut known = std::collections::HashSet::new();
+        let mut models = Vec::new();
+        let mut bearer = self.bearer;
+        loop {
+            if visited.len() >= 1000 || !visited.insert(next.as_str().to_owned()) {
+                return Err("pagination модели повторяется или превышен лимит страниц".into());
+            }
+            let send = |bearer: bool| {
+                let mut request = self
+                    .http
+                    .get(next.clone())
+                    .timeout(self.timeout.min(Duration::from_secs(15)))
+                    .header("anthropic-version", "2023-06-01");
+                if let Some(secret) = &self.secret {
+                    request = if bearer {
+                        request.bearer_auth(secret.expose())
+                    } else {
+                        request.header("x-api-key", secret.expose())
+                    };
+                }
+                request.send()
+            };
+            let mut response = send(bearer)
+                .await
+                .map_err(|_| "не удалось подключиться к провайдеру")?;
+            // Some Anthropic-compatible relays use bearer authentication for /v1/models.
+            if !bearer && matches!(response.status().as_u16(), 401 | 403) && self.secret.is_some() {
+                bearer = true;
+                response = send(true)
+                    .await
+                    .map_err(|_| "не удалось подключиться к провайдеру")?;
+            }
+            if !response.status().is_success() {
+                return Err(format!(
+                    "провайдер вернул HTTP {}",
+                    response.status().as_u16()
+                ));
+            }
+            const MAX_RESPONSE: usize = 16 * 1024 * 1024;
+            if response
+                .content_length()
+                .is_some_and(|size| size > MAX_RESPONSE as u64)
+            {
+                return Err("список моделей слишком велик".into());
+            }
+            let mut bytes = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|_| "ошибка чтения списка моделей")?;
+                if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE {
+                    return Err("список моделей слишком велик".into());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            let json: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|_| "некорректный список моделей")?;
+            let data = json
+                .get("data")
+                .or_else(|| json.get("models"))
+                .and_then(|data| data.as_array())
+                .or_else(|| json.as_array())
+                .ok_or("провайдер не вернул список моделей")?;
+            let mut last = None;
+            for entry in data {
+                if let Some(id) = entry
+                    .as_str()
+                    .or_else(|| entry.get("id").and_then(|id| id.as_str()))
+                {
+                    if !id.trim().is_empty() && id.len() <= 512 && !id.chars().any(char::is_control)
+                    {
+                        last = Some(id.to_owned());
+                        if known.insert(id.to_owned()) {
+                            models.push(id.to_owned());
+                        }
+                    }
+                }
+            }
+            if let Some(link) = json
+                .get("next")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+            {
+                let target = initial
+                    .join(link)
+                    .map_err(|_| "некорректная ссылка на страницу моделей")?;
+                if target.origin() != initial.origin()
+                    || target.path() != initial.path()
+                    || !target.username().is_empty()
+                    || target.password().is_some()
+                {
+                    return Err("небезопасная ссылка на страницу моделей".into());
+                }
+                next = target;
+            } else if let Some(token) = json
+                .get("next_page_token")
+                .or_else(|| json.get("nextPageToken"))
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+            {
+                next = initial.clone();
+                next.query_pairs_mut().append_pair("page_token", token);
+            } else if json.get("has_more").and_then(|v| v.as_bool()) == Some(true) {
+                let cursor = json
+                    .get("last_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+                    .or(last)
+                    .ok_or("нет курсора следующей страницы моделей")?;
+                next = initial.clone();
+                next.query_pairs_mut().append_pair("after_id", &cursor);
+            } else {
+                break;
+            }
+        }
+        Ok(models)
     }
 
     /// Stream non-executable progress immediately and return validated final events.
@@ -118,11 +275,22 @@ impl Client {
         request: &Request,
         progress: Option<&mpsc::Sender<Event>>,
     ) -> Result<Vec<Event>, String> {
-        let body = match self.protocol {
+        let mut body = match self.protocol {
             Protocol::Anthropic => anthropic::encode(request)?,
             Protocol::OpenaiChat => openai_chat::encode(request)?,
             Protocol::OpenaiResponses => openai_responses::encode(request)?,
         };
+        if let Some(effort) = self.effort() {
+            match self.protocol {
+                Protocol::Anthropic => {
+                    body["output_config"] = serde_json::json!({"effort": effort})
+                }
+                Protocol::OpenaiChat => body["reasoning_effort"] = serde_json::json!(effort),
+                Protocol::OpenaiResponses => {
+                    body["reasoning"] = serde_json::json!({"effort": effort})
+                }
+            }
+        }
         for attempt in 0..=self.retry.retries {
             let mut builder = self
                 .http
@@ -232,6 +400,95 @@ impl Client {
         }
         decoder.finish().map_err(|error| (error, true))?;
         stream.finish().map_err(|error| (error, true))?;
+        fill_missing_output_usage(&mut events);
         Ok(events)
+    }
+}
+
+// Some compatible providers return zero or omit output usage despite generating
+// text. Keep real provider counts when available and mark the fallback as an
+// estimate so the UI and usage ledger never present it as an exact count.
+fn fill_missing_output_usage(events: &mut Vec<Event>) {
+    let characters: u64 = events
+        .iter()
+        .map(|event| match event {
+            Event::TextDelta { text } | Event::ThinkingDelta { text } => {
+                text.chars().count() as u64
+            }
+            Event::ToolCall { name, input, .. } => {
+                (name.chars().count() + input.to_string().chars().count()) as u64
+            }
+            _ => 0,
+        })
+        .sum();
+    let estimate = characters.div_ceil(4);
+    if estimate == 0 {
+        return;
+    }
+    if let Some(Event::Usage { usage }) = events
+        .iter_mut()
+        .rev()
+        .find(|event| matches!(event, Event::Usage { .. }))
+    {
+        if usage.output_tokens == 0 || (usage.estimated && usage.output_tokens < estimate) {
+            usage.output_tokens = estimate;
+            usage.estimated = true;
+        }
+    } else {
+        let position = events
+            .iter()
+            .rposition(|event| matches!(event, Event::Done { .. }))
+            .unwrap_or(events.len());
+        events.insert(
+            position,
+            Event::Usage {
+                usage: super::canonical::Usage {
+                    output_tokens: estimate,
+                    estimated: true,
+                    ..Default::default()
+                },
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+    use crate::provider::canonical::Usage;
+    #[test]
+    fn missing_or_zero_usage_is_estimated_but_provider_counts_are_preserved() {
+        for reported in [None, Some(0), Some(7)] {
+            let mut events = vec![Event::TextDelta {
+                text: "Привет!".into(),
+            }];
+            if let Some(output_tokens) = reported {
+                events.push(Event::Usage {
+                    usage: Usage {
+                        input_tokens: 18,
+                        output_tokens,
+                        ..Default::default()
+                    },
+                });
+            }
+            events.push(Event::Done {
+                reason: "end_turn".into(),
+            });
+            fill_missing_output_usage(&mut events);
+            let usage = events
+                .iter()
+                .rev()
+                .find_map(|event| match event {
+                    Event::Usage { usage } => Some(usage),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(usage.output_tokens, if reported == Some(7) { 7 } else { 2 });
+            assert_eq!(usage.estimated, reported != Some(7));
+            if reported.is_some() {
+                assert_eq!(usage.input_tokens, 18);
+            }
+            assert!(matches!(events.last(), Some(Event::Done { .. })));
+        }
     }
 }

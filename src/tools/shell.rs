@@ -8,10 +8,7 @@ use crate::perm::{Decision, Engine, Mode, Rule};
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{
@@ -20,17 +17,15 @@ use tokio::{
     sync::oneshot,
 };
 
-/// Maximum wall time per command, including waiting for its session.
-pub const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 /// Maximum retained merged stdout/stderr bytes per command.
 pub const OUTPUT_LIMIT: usize = 100_000;
-static SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Split simple shell lists into independently permission-checked command strings.
 /// Quotes and escapes protect literal separators. Pipelines and &&/||/; are supported.
-/// Expansions, substitutions, subshells, redirections (including heredocs), background
-/// operators, assignments before executables, globs, comments and control syntax fail
-/// closed, even in bypass mode. This is deliberately not a general shell parser.
+/// Expansions, substitutions, subshells, output-destroying redirections other than
+/// `2>/dev/null` and `2>&1` (including heredocs), background operators, assignments
+/// before executables, globs, comments and control syntax fail closed, even in bypass
+/// mode. This is deliberately not a general shell parser.
 pub fn split_commands(command: &str) -> Result<Vec<String>, String> {
     if command.len() > 32_768 {
         return Err("command exceeds 32 KiB".into());
@@ -70,7 +65,23 @@ pub fn split_commands(command: &str) -> Result<Vec<String>, String> {
         }
         match ch {
             '\'' | '"' => quote = Some(ch),
-            '$' | '`' | '(' | ')' | '<' | '>' | '{' | '}' | '*' | '?' | '[' | ']' | '~' | '#' => {
+            '&' if chars.peek().is_some_and(|(_, next)| *next == '>') => {
+                let Some(length) = discard_redirect(&command[i..]) else {
+                    return Err("complex shell syntax is unsupported".into());
+                };
+                while chars.peek().is_some_and(|(index, _)| *index < i + length) {
+                    chars.next();
+                }
+            }
+            '>' => {
+                let Some(length) = discard_redirect(&command[i..]) else {
+                    return Err("complex shell syntax is unsupported".into());
+                };
+                while chars.peek().is_some_and(|(index, _)| *index < i + length) {
+                    chars.next();
+                }
+            }
+            '$' | '`' | '(' | ')' | '<' | '{' | '}' | '*' | '?' | '[' | ']' | '~' | '#' => {
                 return Err("complex shell syntax is unsupported".into())
             }
             '&' | '|' | ';' => {
@@ -105,6 +116,41 @@ pub fn split_commands(command: &str) -> Result<Vec<String>, String> {
         return Err("empty command".into());
     }
     Ok(parts)
+}
+
+/// Byte length of a redirect that only discards output, e.g. `2>/dev/null` or `2>&1`.
+///
+/// Silencing a stream touches no file and runs nothing, so it passes the
+/// conservative splitter; every other redirect still fails closed.
+fn discard_redirect(rest: &str) -> Option<usize> {
+    let mut index = usize::from(rest.starts_with('&'));
+    index += rest[index..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .count();
+    index += if rest[index..].starts_with(">>") {
+        2
+    } else if rest[index..].starts_with('>') {
+        1
+    } else {
+        return None;
+    };
+    index += rest[index..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .count();
+    let target = &rest[index..];
+    if let Some(after) = target.strip_prefix("/dev/null") {
+        // The word must end here: `/dev/null/file` writes a real file.
+        let boundary = after
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || "_./-".contains(c)));
+        return boundary.then_some(index + "/dev/null".len());
+    }
+    let descriptor = target.strip_prefix('&')?;
+    let digits = descriptor.chars().take_while(char::is_ascii_digit).count();
+    (digits > 0).then_some(index + 1 + digits)
 }
 
 fn validate_simple(part: &str) -> Result<(), String> {
@@ -157,23 +203,78 @@ fn validate_simple(part: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn authorize(engine: &Engine, command: &str) -> Result<(), String> {
-    let parts = split_commands(command)?;
-    // Check explicit whole-command deny/ask rules as well as component rules.
+/// Inspect simple commands component by component. Complex Bash is authorized as
+/// a whole and is never covered by remembered simple-command prefixes.
+pub fn permission_decision(engine: &Engine, command: &str) -> Result<Decision, String> {
+    if command.trim().is_empty() || command.contains('\0') {
+        return Err("empty command or NUL byte".into());
+    }
+    let parts = match split_commands(command) {
+        Ok(parts) => parts,
+        Err(_) => {
+            // We cannot safely infer every executable from arbitrary shell syntax.
+            // Scoped deny/ask rules must therefore not be silently bypassed.
+            let whole = engine.decide("Bash", command, true);
+            if whole == Decision::Deny
+                || engine
+                    .deny
+                    .iter()
+                    .any(|rule| rule.tool == "Bash" || rule.tool == "*")
+            {
+                return Ok(Decision::Deny);
+            }
+            if engine.mode != Mode::Bypass
+                && engine
+                    .ask
+                    .iter()
+                    .any(|rule| rule.tool == "Bash" || rule.tool == "*")
+            {
+                return Ok(Decision::Ask);
+            }
+            return Ok(whole);
+        }
+    };
     let mut whole = engine.clone();
     if whole.mode != Mode::Bypass {
         whole.allow = vec![Rule::parse("Bash(**)")?];
     }
+    let mut result = Decision::Allow;
     for decision in std::iter::once(whole.decide("Bash", command, true))
         .chain(parts.iter().map(|part| engine.decide("Bash", part, true)))
     {
         match decision {
+            Decision::Deny => return Ok(Decision::Deny),
+            Decision::Ask => result = Decision::Ask,
             Decision::Allow => {}
-            Decision::Ask => return Err("permission requires explicit approval".into()),
-            Decision::Deny => return Err("permission denied by policy".into()),
         }
     }
-    Ok(())
+    Ok(result)
+}
+
+/// A conservative, visible scope for similar single commands: executable and first argument.
+pub fn similar_prefix(command: &str) -> Option<String> {
+    let parts = split_commands(command).ok()?;
+    if parts.len() != 1 || command.trim_end().ends_with(';') {
+        return None;
+    }
+    let mut words = parts[0].split_whitespace();
+    let executable = words.next()?;
+    let argument = words.next()?;
+    if !argument
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
+    {
+        return None;
+    }
+    Some(format!("{executable} {argument}"))
+}
+
+fn authorize(engine: &Engine, command: &str) -> Result<(), String> {
+    match permission_decision(engine, command)? {
+        Decision::Allow => Ok(()),
+        Decision::Ask => Err("permission requires explicit approval".into()),
+        Decision::Deny => Err("permission denied by policy".into()),
+    }
 }
 
 /// Completed command with bounded, lossy UTF-8 merged output; nonzero exits are not errors.
@@ -236,7 +337,7 @@ impl Session {
     }
 
     /// Execute with current policy; Ask is an error, never implicit approval.
-    /// The timeout must be nonzero and at most 600 seconds. Dropping this future
+    /// The timeout must be nonzero. `Duration::MAX` means no deadline. Dropping this future
     /// cancels the active process group and resets state. No auto-read-only heuristic.
     pub async fn execute(
         &self,
@@ -284,8 +385,8 @@ impl Session {
     }
 
     fn check(&self, engine: &Engine, command: &str, timeout: Duration) -> Result<(), String> {
-        if timeout.is_zero() || timeout > MAX_TIMEOUT {
-            return Err("timeout must be in (0, 600] seconds".into());
+        if timeout.is_zero() {
+            return Err("timeout must be positive".into());
         }
         if engine.root != self.root {
             return Err("session workspace does not match permission engine".into());
@@ -307,10 +408,17 @@ impl Session {
                 Some(process) => process,
                 None => Process::spawn(&self.root, &self.home)?,
             };
-            let id = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let marker = format!("\x1eM7{id}:").into_bytes();
+            // Command output is untrusted. A fresh OS-random marker prevents a
+            // file or subprocess from accidentally or deliberately ending a job.
+            let mut nonce = [0_u8; 16];
+            getrandom::fill(&mut nonce).map_err(|_| "cannot create shell completion marker")?;
+            let id = nonce
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let marker = format!("\x1eGC{id}:").into_bytes();
             let script = format!(
-                "{{ {command}\n}} </dev/null\nbuiltin printf '\\036M7{id}:%s\\037' \"$?\"\n"
+                "{{ {command}\n}} </dev/null\nbuiltin printf '\\036GC{id}:%s\\037' \"$?\"\n"
             );
             process
                 .input
@@ -361,7 +469,12 @@ impl Session {
             *slot = Some(process);
             Ok::<i32, String>(code)
         };
-        match tokio::time::timeout(timeout, work).await {
+        let result = if tokio::time::Instant::now().checked_add(timeout).is_none() {
+            Ok(work.await)
+        } else {
+            tokio::time::timeout(timeout, work).await
+        };
+        match result {
             Ok(result) => Ok(capture
                 .lock()
                 .map_err(|_| "output lock poisoned")?
@@ -449,10 +562,7 @@ impl Process {
         command
             .args(["--noprofile", "--norc"])
             .current_dir(root)
-            .env_clear()
             .env("HOME", home)
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-            .env("LANG", "C.UTF-8")
             .env("TERM", "dumb")
             .env("CI", "1")
             .env("GIT_TERMINAL_PROMPT", "0")

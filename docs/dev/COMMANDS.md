@@ -10,12 +10,13 @@ The dispatcher renders bounded cards, not interactive pickers unless noted below
 | `/compact` | None | Trims long tool results; card reports approximate token reduction. No model summarization. |
 | `/config` | `[model <id>\|max_turns <positive integer>]` | Settings table; only these two keys can be changed. Other displayed settings are read-only. |
 | `/model` | `[model-id]` | Changes model identifier; static example identifiers are not a discovered/validated availability list. No picker. |
+| `/effort` | `[default\|low\|medium\|high\|xhigh\|max]` | Select reasoning effort in the TUI or specify it directly; defaults to xhigh and is remembered separately for each model. Model/provider support varies. |
 | `/provider` | None | Transport/auth configuration reference; does not switch providers. |
 | `/usage` | None | Interactive period tabs and chart toggle in the TUI app; dispatcher returns a static card. See limitations below. |
 | `/cost` | None | Current status counters and estimated cost; no top-model ranking. |
 | `/status` | None | Model, permission, workspace, branch, message count and counters table. |
 | `/context` | None | Approximate text-based token table and aggregate bar, assuming an explicitly labeled 200k window. Not a measured model window or stacked bar. |
-| `/resume` | `[session-id]` | Lists up to eight project sessions. With ID, loads saved messages into memory; invalid/corrupt/inaccessible IDs preserve current context. Does not switch active persistence journal, restore counters, or restore workspace files. |
+| `/resume` | `[session-id]` | Interactive scrollable project session picker with search by title, branch, or ID; or open an ID directly. Loads the messages and switches the active journal so new turns are saved to that session. Invalid IDs preserve the current session. Counters and workspace files are not restored. |
 | `/rewind` | `[message-index]` | Lists recent messages or removes messages from a zero-based index onward. Does not restore files or shadow-git checkpoints. |
 | `/plan` | `[task]` | Enables read-only permission mode. Task text is displayed, not submitted for execution. |
 | `/permissions` | `[allow\|ask\|deny Tool(pattern)]` | Rule counts/list and process-local additions. No deletion/editor/persistence. |

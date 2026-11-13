@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     agent::{Agent, InputQueue},
-    provider::canonical::{Event as Progress, Message, Role, Usage},
+    provider::canonical::{Content, Event as Progress, Message, Role, Usage},
     theme::{self, ColorMode, Theme},
 };
 use crossterm::event::{Event, EventStream};
@@ -22,6 +22,35 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
+
+fn apply_model_effort(agent: &mut Agent, status: &mut Status) {
+    let _ = agent.client.set_effort(Some("xhigh"));
+    if let Some(home) = std::env::var_os("HOME") {
+        if let Err(error) = crate::effort_preferences::apply(
+            &mut agent.client,
+            std::path::Path::new(&home),
+            &agent.model,
+        ) {
+            status.toast = Some(format!("Не удалось загрузить effort: {error}"));
+        }
+    }
+    status.effort = agent.client.effort().map(str::to_owned);
+}
+
+fn save_effort(agent: &Agent, status: &mut Status) {
+    let result = std::env::var_os("HOME")
+        .ok_or_else(|| io::Error::other("HOME не задан"))
+        .and_then(|home| {
+            crate::effort_preferences::set(
+                std::path::Path::new(&home),
+                &agent.model,
+                agent.client.effort().unwrap_or("default"),
+            )
+        });
+    if let Err(error) = result {
+        status.toast = Some(format!("Не удалось сохранить effort: {error}"));
+    }
+}
 
 // Keep deadlines independent of event arrival; dropped select futures must not
 // restart the frame delay. Skip missed frames rather than burst-rendering them.
@@ -88,13 +117,45 @@ impl LiveUsage {
         status.input = base.input.saturating_add(total.input_tokens);
         status.turn_output = turn_output;
         status.output = base.output.saturating_add(turn_output);
-        status.output_estimated = self.completed.estimated
+        status.output_estimated = base.output_estimated
+            || self.completed.estimated
             || self.current.estimated
             || estimate > self.current.output_tokens;
         status.cache_read = base.cache_read.saturating_add(total.cache_read_tokens);
         status.cache_write = base.cache_write.saturating_add(total.cache_write_tokens);
         status.tokens_per_second = Some(turn_output as f64 / elapsed.as_secs_f64().max(0.001));
     }
+}
+
+fn completion_line(
+    unix_seconds: u64,
+    elapsed: Duration,
+    usage: &Usage,
+    width: usize,
+    mode: ColorMode,
+) -> String {
+    let seconds = unix_seconds % 86_400;
+    let time = format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds / 60) % 60,
+        seconds % 60
+    );
+    let text = format!(
+        "  {time} UTC • {} • {}{}↓",
+        super::render::elapsed_duration(elapsed.as_secs()),
+        if usage.estimated { "~" } else { "" },
+        super::statusbar::compact(usage.output_tokens)
+    );
+    let clipped = super::clip(&text, width);
+    let color = theme::foreground(Theme::default().placeholder, mode);
+    let bullet = format!("{}•{}{}", theme::bold(mode), theme::reset(mode), color);
+    format!(
+        "{}{}{}",
+        color,
+        clipped.replace('•', &bullet),
+        theme::reset(mode)
+    )
 }
 
 #[cfg(test)]
@@ -122,6 +183,24 @@ pub struct Options<'a> {
     )>,
 }
 
+fn update_copy_notice(
+    renderer: &mut Renderer<io::Stdout>,
+    status: &mut Status,
+    deadline: &mut Option<Instant>,
+) -> io::Result<bool> {
+    if let Some(characters) = renderer.copy_selection_if_due()? {
+        status.copied_chars = Some(characters);
+        *deadline = Some(Instant::now() + Duration::from_secs(2));
+        return Ok(true);
+    }
+    if deadline.is_some_and(|until| Instant::now() >= until) {
+        status.copied_chars = None;
+        *deadline = None;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn remove_queued_prompt(status: &mut Status, prompt: &str) {
     if let Some(index) = status
         .queued_prompts
@@ -139,6 +218,7 @@ fn paint(
     stream: &mut super::markdown::Markdown,
     stream_started: &mut bool,
     tool_running: bool,
+    approval: Option<&super::approval_picker::Pending>,
     mode: ColorMode,
 ) -> io::Result<()> {
     let (width, height) = renderer.size();
@@ -173,11 +253,34 @@ fn paint(
     let finalized = stream.drain_stable(text_width, &Theme::default(), mode, room);
     let finalized = if !finalized.is_empty() {
         let rows = decorate_assistant_rows(finalized, *stream_started, &Theme::default(), mode);
-        *stream_started = true;
+        if !rows.is_empty() {
+            *stream_started = true;
+        }
         rows
     } else {
         Vec::new()
     };
+    if let Some(approval) = approval {
+        if !finalized.is_empty() {
+            renderer.finalize_styled(&finalized)?;
+        }
+        return renderer.paint_styled(&approval.frame(
+            width.saturating_sub(1),
+            height.saturating_sub(1).max(1),
+            mode,
+        ));
+    }
+    if status.bypass_confirmation {
+        if !finalized.is_empty() {
+            renderer.finalize_styled(&finalized)?;
+        }
+        return renderer.paint_styled(&super::bypass_picker::frame(
+            status.bypass_selected_yes,
+            width.saturating_sub(1),
+            super::picker::height(height),
+            mode,
+        ));
+    }
     let mut rendered = assistant_rows(
         stream,
         width.saturating_sub(1),
@@ -211,11 +314,7 @@ fn draw_header(
 ) -> io::Result<()> {
     let (width, height) = renderer.size();
     let width = width.saturating_sub(1);
-    let lines = header.live_lines_for_size(width, status, height);
-    let rows = lines
-        .iter()
-        .map(|row| widgets::style_frame_row_with_panel(row, &Theme::default(), mode, false))
-        .collect::<Vec<_>>();
+    let rows = header.styled_lines_for_size(width, status, height, &Theme::default(), mode);
     renderer.finalize_styled(&rows)
 }
 
@@ -297,6 +396,11 @@ fn format_assistant_turn(
 ) -> Vec<String> {
     stream.finish();
     let mut rows = assistant_rows(stream, width.saturating_sub(1), theme, mode, started);
+    // A message that carried only blank lines is a separator the model already
+    // emits around tool calls; committing it again stretches the transcript.
+    if rows.iter().all(|row| row.trim().is_empty()) {
+        return Vec::new();
+    }
     rows.push(String::new());
     rows
 }
@@ -324,6 +428,7 @@ fn decorate_assistant_rows(
     let glyphs = widgets::Glyphs::detect();
     let mark = if glyphs.ascii { "*" } else { "✿" };
     rows.into_iter()
+        .skip_while(|row| !started && widgets::unstyled(row).trim().is_empty())
         .enumerate()
         .map(|(index, row)| {
             if index == 0 && !started {
@@ -343,6 +448,16 @@ fn decorate_assistant_rows(
             }
         })
         .collect()
+}
+
+fn start_turn_status(status: &mut Status) {
+    status.busy = true;
+    status.subagents.clear();
+    status.elapsed_secs = 0;
+    status.elapsed_millis = 0;
+    status.turn_output = 0;
+    status.tokens_per_second = None;
+    status.retry_notice = None;
 }
 
 fn finish_turn_status(status: &mut Status, succeeded: bool) {
@@ -411,7 +526,14 @@ async fn handle_aux_action(
     let width = renderer.size().0.saturating_sub(1).max(20);
     match act {
         Action::CyclePermission => {
-            commands::cycle_permission(agent, status);
+            if commands::next_permission_mode(agent.tools.permissions.mode)
+                == crate::perm::Mode::Bypass
+            {
+                status.bypass_confirmation = true;
+                status.bypass_selected_yes = false;
+            } else {
+                commands::cycle_permission(agent, status);
+            }
         }
         Action::Rewind => {
             if let Some(card) =
@@ -483,6 +605,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     };
     let mut status = Status {
         model: options.model.into(),
+        effort: agent.client.effort().map(str::to_owned),
         permission: options.permission.into(),
         branch: options.branch.into(),
         ..Status::default()
@@ -496,6 +619,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
         .unwrap_or_default();
     let queue = InputQueue::default();
     let mut exit_armed = false;
+    let mut copy_deadline = None;
     loop {
         status.queued = queue.len();
         paint(
@@ -505,23 +629,49 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             &mut super::markdown::Markdown::new(),
             &mut false,
             false,
+            None,
             mode,
         )?;
-        let pending = if let Some(prompt) = queue.pop_front() {
+        let pending = if !status.bypass_confirmation && !queue.is_empty() {
+            let Some(prompt) = queue.pop_front() else {
+                continue;
+            };
             remove_queued_prompt(&mut status, &prompt);
             status.queued = queue.len();
             Action::Submit(prompt)
         } else {
             let event = match initial.take() {
-                Some(event) => event,
+                Some(event) => Some(event),
                 None => loop {
                     tokio::select! {
-                        event = events.next() => match event { Some(event) => break event?, None => return Ok(()) },
-                        _ = tokio::time::sleep(Duration::from_millis(100)) => renderer.copy_selection_if_due()?,
+                        event = events.next() => match event { Some(event) => break Some(event?), None => return Ok(()) },
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                            if update_copy_notice(&mut renderer, &mut status, &mut copy_deadline)? { break None; }
+                        }
                     }
                 },
             };
-            action(event, &mut editor, &mut renderer)
+            if let Some(event) = event {
+                if status.bypass_confirmation {
+                    if let Some(confirmed) =
+                        super::bypass_picker::answer(&event, &mut status.bypass_selected_yes)
+                    {
+                        status.bypass_confirmation = false;
+                        if confirmed {
+                            agent.tools.permissions.mode = crate::perm::Mode::Bypass;
+                            status.permission =
+                                commands::permission_label(crate::perm::Mode::Bypass).into();
+                            status.toast = None;
+                        }
+                    }
+                    if matches!(event, Event::Key(_)) {
+                        continue;
+                    }
+                }
+                action(event, &mut editor, &mut renderer)
+            } else {
+                Action::Refresh
+            }
         };
         match pending {
             Action::Exit => return Ok(()),
@@ -579,6 +729,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     return Ok(());
                 }
                 if matches!(prompt.trim(), "/new" | "/clear") {
+                    agent.tools.clear_shell_approvals();
                     if let Some((store, _)) = &persistence {
                         let store = store.clone();
                         let create_store = store.clone();
@@ -595,6 +746,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     let branch = status.branch.clone();
                     status = Status {
                         model: agent.model.clone(),
+                        effort: agent.client.effort().map(str::to_owned),
                         permission,
                         branch,
                         ..Status::default()
@@ -633,12 +785,150 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     continue;
                 }
                 if prompt.trim() == "/model" {
-                    if let Some(model) =
-                        super::model_picker::select(&mut renderer, &mut events, &agent.model)
-                            .await?
+                    if let Some(model) = super::model_picker::select(
+                        &mut renderer,
+                        &mut events,
+                        &agent.model,
+                        &agent.client,
+                    )
+                    .await?
                     {
                         agent.model = model.clone();
                         status.model = model;
+                        apply_model_effort(agent, &mut status);
+                    }
+                    continue;
+                }
+                if prompt.trim() == "/effort" {
+                    if let Some(level) = super::effort_picker::select(
+                        &mut renderer,
+                        &mut events,
+                        &agent.model,
+                        agent.client.effort(),
+                    )
+                    .await?
+                    {
+                        let value = if level == "default" {
+                            None
+                        } else {
+                            Some(level.as_str())
+                        };
+                        if agent.client.set_effort(value).is_ok() {
+                            status.effort = agent.client.effort().map(str::to_owned);
+                            save_effort(agent, &mut status);
+                        }
+                    }
+                    continue;
+                }
+                if let Some(args) = prompt
+                    .trim()
+                    .strip_prefix("/resume")
+                    .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    let Some((store, _)) = &persistence else {
+                        status.toast = Some("Хранилище сессий недоступно".into());
+                        continue;
+                    };
+                    let store = store.clone();
+                    let id = if args.trim().is_empty() {
+                        let list_store = store.clone();
+                        match tokio::task::spawn_blocking(move || list_store.list())
+                            .await
+                            .map_err(io::Error::other)?
+                        {
+                            Ok(list) if !list.is_empty() => {
+                                super::session_picker::select(&mut renderer, &mut events, &list)
+                                    .await?
+                            }
+                            Ok(_) => {
+                                status.toast = Some("Сохранённых чатов пока нет".into());
+                                None
+                            }
+                            Err(_) => {
+                                status.toast = Some("Не удалось прочитать сохранённые чаты".into());
+                                None
+                            }
+                        }
+                    } else {
+                        Some(args.trim().to_owned())
+                    };
+                    if let Some(id) = id {
+                        let resume_store = store.clone();
+                        match tokio::task::spawn_blocking(move || resume_store.resume(&id))
+                            .await
+                            .map_err(io::Error::other)?
+                        {
+                            Ok(session) => {
+                                agent.tools.clear_shell_approvals();
+                                let count = session.messages.len();
+                                let id = session.id.clone();
+                                let interrupted = session.interrupted_bytes > 0;
+                                messages = session.messages.clone();
+                                persistence = Some((store, session));
+                                let permission = status.permission.clone();
+                                let branch = status.branch.clone();
+                                let dirty = status.dirty;
+                                status = Status {
+                                    model: agent.model.clone(),
+                                    effort: agent.client.effort().map(str::to_owned),
+                                    permission,
+                                    branch,
+                                    dirty,
+                                    queued: queue.len(),
+                                    queued_prompts: status.queued_prompts.clone(),
+                                    ..Status::default()
+                                };
+                                let mut body = vec![
+                                    format!("Открыта сессия {id} · сообщений: {count}"),
+                                    "Новые сообщения будут сохранены в выбранный чат.".into(),
+                                ];
+                                if interrupted {
+                                    body.push("Незавершённый хвост журнала пропущен.".into());
+                                }
+                                renderer.finalize_card(&super::widgets::card(
+                                    "/resume",
+                                    &body,
+                                    "",
+                                    renderer.size().0.saturating_sub(1),
+                                ))?;
+                                for message in &messages {
+                                    for content in &message.content {
+                                        if let Content::Text { text } = content {
+                                            match message.role {
+                                                Role::User => {
+                                                    renderer.finalize_styled(&format_user_turn(
+                                                        text,
+                                                        renderer.size().0,
+                                                        &Theme::default(),
+                                                        mode,
+                                                    ))?
+                                                }
+                                                Role::Assistant => {
+                                                    let mut markdown =
+                                                        super::markdown::Markdown::new();
+                                                    markdown.push(text);
+                                                    renderer.finalize_styled(
+                                                        &format_assistant_turn(
+                                                            &mut markdown,
+                                                            false,
+                                                            renderer.size().0,
+                                                            &Theme::default(),
+                                                            mode,
+                                                        ),
+                                                    )?;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                status.toast = Some(
+                                    "Не удалось открыть чат; текущая сессия не изменена".into(),
+                                );
+                            }
+                        }
                     }
                     continue;
                 }
@@ -650,7 +940,14 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         crate::usage::UsageLedger::open(&home)?.entries(None)
                     })
                     .await
-                    .map_err(io::Error::other)??;
+                    .map_err(io::Error::other)?;
+                    let entries = match entries {
+                        Ok(entries) => entries,
+                        Err(_) => {
+                            status.toast = Some("Не удалось прочитать журнал использования".into());
+                            continue;
+                        }
+                    };
                     let session_id = persistence
                         .as_ref()
                         .map(|(_, s)| s.id.as_str())
@@ -676,7 +973,27 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             renderer.size().1.saturating_sub(1),
                             &mut scroll,
                         );
-                        renderer.paint(&Frame {
+                        let theme = crate::theme::Theme::default();
+                        let mode = renderer.color_mode();
+                        let width = renderer.size().0.saturating_sub(1);
+                        let last = lines.len().saturating_sub(1);
+                        let lines = lines
+                            .iter()
+                            .enumerate()
+                            .map(|(index, line)| {
+                                if index == 0 {
+                                    super::picker::heading(line, width, &theme, mode)
+                                } else {
+                                    let color = if index == last {
+                                        theme.placeholder
+                                    } else {
+                                        theme.panel_text
+                                    };
+                                    super::picker::text(line, width, color, mode)
+                                }
+                            })
+                            .collect();
+                        renderer.paint_styled(&Frame {
                             lines,
                             cursor: None,
                         })?;
@@ -716,6 +1033,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     continue;
                 }
                 let card_width = renderer.size().0.saturating_sub(1);
+                let previous_model = agent.model.clone();
                 if let Some(card) = commands::execute_command(
                     &prompt,
                     agent,
@@ -725,6 +1043,20 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 )
                 .await?
                 {
+                    if agent.model != previous_model {
+                        apply_model_effort(agent, &mut status);
+                    }
+                    let mut command_parts = prompt.split_whitespace();
+                    if command_parts.next() == Some("/effort") {
+                        if let Some(level) = command_parts.next() {
+                            if matches!(
+                                level.to_ascii_lowercase().as_str(),
+                                "default" | "low" | "medium" | "high" | "xhigh" | "max"
+                            ) {
+                                save_effort(agent, &mut status);
+                            }
+                        }
+                    }
                     renderer.finalize_card(&card)?;
                     continue;
                 }
@@ -737,6 +1069,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 let mut request = messages.clone();
                 request.push(Message::text(Role::User, prompt));
                 let (sender, mut progress) = mpsc::channel(256);
+                let (approval_sender, mut approvals) = mpsc::channel(1);
+                let mut approval: Option<super::approval_picker::Pending> = None;
                 let started = Instant::now();
                 let mut stream = super::markdown::Markdown::new();
                 let mut stream_started = false;
@@ -745,23 +1079,21 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 let mut committed_response_text = false;
                 let mut dirty = true;
                 let base = status.clone();
-                status.busy = true;
-                status.subagents.clear();
-                status.elapsed_secs = 0;
-                status.elapsed_millis = 0;
-                status.retry_notice = None;
+                start_turn_status(&mut status);
                 let mut live_usage = LiveUsage::default();
                 let mut retry_deadline: Option<(Instant, u32, u32)> = None;
                 let mut pending_permission = None;
                 let permission_mode = agent.tools.permissions.mode;
+                let ledger_model = agent.model.clone();
                 let mut frames = frame_clock();
                 let checkpoint = crate::agent::TurnCheckpoint::new(request.clone());
                 let mut recovery = None;
-                let mut run = Box::pin(agent.run_with_steering(
+                let mut run = Box::pin(agent.run_with_approvals(
                     request,
                     Some(&sender),
                     Some(&checkpoint),
                     Some(&queue),
+                    Some(&approval_sender),
                 ));
                 loop {
                     tokio::select! {
@@ -769,10 +1101,14 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             finish_turn_status(&mut status, result.is_ok());
                             match result {
                                 Ok(outcome) => {
+                                    let finished_at = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_secs();
+                                    let elapsed = started.elapsed();
                                     status.input = base.input + outcome.usage.input_tokens;
                                     status.output = base.output + outcome.usage.output_tokens;
                                     status.turn_output = outcome.usage.output_tokens;
-                                    status.output_estimated = outcome.usage.estimated;
+                                    status.output_estimated = base.output_estimated || outcome.usage.estimated;
                                     status.cache_read = base.cache_read + outcome.usage.cache_read_tokens;
                                     status.cache_write = base.cache_write + outcome.usage.cache_write_tokens;
                                     status.tokens_per_second = Some(outcome.usage.output_tokens as f64 / started.elapsed().as_secs_f64().max(0.001));
@@ -784,7 +1120,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                         let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or_else(|| io::Error::other("HOME is required"))?;
                                         let project = session.project.clone();
                                         let provider = options.provider.to_owned();
-                                        let model = options.model.to_owned();
+                                        let model = ledger_model.clone();
                                         tokio::task::spawn_blocking(move || {
                                             crate::usage::record_turn(&home, &id, &project, &provider, &model, &requests)?;
                                             for message in appended { store.append(&id, &message)?; }
@@ -811,6 +1147,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                             mode,
                                         ))?;
                                     }
+                                    let line = completion_line(finished_at, elapsed, &outcome.usage, renderer.size().0.saturating_sub(1), mode);
+                                    renderer.finalize_styled(&[line, String::new()])?;
                                 }
                                 Err(error) => {
                                     recovery = Some(false);
@@ -943,9 +1281,40 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             }
                             dirty = true;
                         }
+                        request = approvals.recv() => {
+                            if let Some(request) = request {
+                                approval = Some(super::approval_picker::Pending::new(request));
+                                dirty = true;
+                            }
+                        }
                         event = events.next() => {
                             let Some(event) = event else { return Ok(()); };
-                            match action(event?, &mut editor, &mut renderer) {
+                            let event = event?;
+                            if let Some(pending) = &mut approval {
+                                if let Event::Resize(w, h) = event {
+                                    renderer.resize(w.into(), h.into());
+                                    pending.resized();
+                                } else {
+                                    let (width, height) = renderer.size();
+                                    if let Some(decision) = pending.answer(&event, width.saturating_sub(1), height.saturating_sub(1).max(1)) {
+                                        if let Some(pending) = approval.take() { pending.finish(decision); }
+                                    }
+                                }
+                                dirty = true;
+                                continue;
+                            }
+                            if status.bypass_confirmation {
+                                if let Some(confirmed) = super::bypass_picker::answer(&event, &mut status.bypass_selected_yes) {
+                                    status.bypass_confirmation = false;
+                                    if confirmed {
+                                        pending_permission = Some(crate::perm::Mode::Bypass);
+                                        status.permission = commands::permission_label(crate::perm::Mode::Bypass).into();
+                                        status.toast = None;
+                                    }
+                                }
+                                if matches!(event, Event::Key(_)) { dirty = true; continue; }
+                            }
+                            match action(event, &mut editor, &mut renderer) {
                                 Action::Exit => return Ok(()),
                                 Action::Interrupt => {
                                     status.busy = false;
@@ -1000,10 +1369,14 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     let current = pending_permission
                                         .unwrap_or(permission_mode);
                                     let next = commands::next_permission_mode(current);
-                                    pending_permission = Some(next);
-                                    status.permission =
-                                        commands::permission_label(next).into();
-                                    status.toast = None;
+                                    if next == crate::perm::Mode::Bypass {
+                                        status.bypass_confirmation = true;
+                                        status.bypass_selected_yes = false;
+                                    } else {
+                                        pending_permission = Some(next);
+                                        status.permission = commands::permission_label(next).into();
+                                        status.toast = None;
+                                    }
                                 }
                                 Action::Rewind | Action::Complete => {
                                     status.toast = Some("Заверши или отмени активный ход".into());
@@ -1013,14 +1386,14 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             dirty = true;
                         }
                         _ = frames.tick(), if dirty || status.busy => {
-                            renderer.copy_selection_if_due()?;
+                            update_copy_notice(&mut renderer, &mut status, &mut copy_deadline)?;
                             status.elapsed_secs = started.elapsed().as_secs();
                             status.elapsed_millis = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                             if let Some((deadline, attempt, max_attempts)) = retry_deadline {
                                 let seconds = deadline.saturating_duration_since(Instant::now()).as_millis().div_ceil(1000);
                                 status.retry_notice = Some(format!("Повтор через {seconds}с (попытка {attempt} из {max_attempts})"));
                             }
-                            paint(&mut renderer, &editor, &status, &mut stream, &mut stream_started, tool_running, mode)?;
+                            paint(&mut renderer, &editor, &status, &mut stream, &mut stream_started, tool_running, approval.as_ref(), mode)?;
                             dirty = false;
                         }
                     }
@@ -1071,5 +1444,116 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             Action::None => {}
             _ => exit_armed = false,
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    #[test]
+    fn completion_receipt_has_utc_elapsed_and_per_turn_usage() {
+        let usage = Usage {
+            output_tokens: 12,
+            ..Usage::default()
+        };
+        assert_eq!(
+            completion_line(
+                86_400 + 13 * 3600 + 5 * 60 + 9,
+                Duration::from_secs(5),
+                &usage,
+                120,
+                ColorMode::None
+            ),
+            "  13:05:09 UTC • 5с • 12↓"
+        );
+        let estimated = Usage {
+            output_tokens: 3,
+            estimated: true,
+            ..Usage::default()
+        };
+        assert_eq!(
+            completion_line(
+                0,
+                Duration::from_secs(3725),
+                &estimated,
+                120,
+                ColorMode::None
+            ),
+            "  00:00:00 UTC • 1ч 2м 5с • ~3↓"
+        );
+        let large = Usage {
+            output_tokens: 13_291,
+            ..Usage::default()
+        };
+        assert!(
+            completion_line(0, Duration::ZERO, &large, 120, ColorMode::None).ends_with("13.3k↓")
+        );
+        assert!(
+            completion_line(0, Duration::ZERO, &usage, 120, ColorMode::TrueColor)
+                .contains("\x1b[1m•")
+        );
+    }
+}
+
+#[cfg(test)]
+mod display_regressions {
+    use super::*;
+    #[test]
+    fn leading_blank_stream_chunks_do_not_detach_the_assistant_marker() {
+        for mode in [ColorMode::None, ColorMode::TrueColor] {
+            let mut stream = super::super::markdown::Markdown::new();
+            stream.push("\n\n\n\n");
+            let stable = stream.drain_stable(80, &Theme::default(), mode, 1);
+            assert!(decorate_assistant_rows(stable, false, &Theme::default(), mode).is_empty());
+            assert!(assistant_rows(&stream, 80, &Theme::default(), mode, false).is_empty());
+            stream.push("Запускаю исследователей.");
+            let rows = assistant_rows(&stream, 80, &Theme::default(), mode, false);
+            let visible: Vec<_> = rows.iter().map(|row| widgets::unstyled(row)).collect();
+            assert!(visible[0].starts_with("✿ Запускаю") || visible[0].starts_with("* Запускаю"));
+            let final_rows = format_assistant_turn(&mut stream, false, 80, &Theme::default(), mode);
+            let first = widgets::unstyled(&final_rows[0]);
+            assert!(first.starts_with("✿ Запускаю") || first.starts_with("* Запускаю"));
+        }
+    }
+
+    #[test]
+    fn new_turn_resets_its_live_tokens_immediately_but_keeps_session_total() {
+        let mut status = Status {
+            input: 100,
+            output: 13337,
+            turn_output: 13291,
+            elapsed_secs: 42,
+            elapsed_millis: 42000,
+            tokens_per_second: Some(12.0),
+            output_estimated: true,
+            ..Status::default()
+        };
+        start_turn_status(&mut status);
+        assert!(status.busy);
+        assert_eq!(status.turn_output, 0);
+        assert_eq!(status.elapsed_secs, 0);
+        assert_eq!(status.elapsed_millis, 0);
+        assert_eq!(status.tokens_per_second, None);
+        assert_eq!((status.input, status.output), (100, 13337));
+        let frame = Frame::input(&Editor::default(), &status, 80, 24);
+        assert!(frame
+            .lines
+            .iter()
+            .any(|line| line.contains("Думаю… (0с · ↓ 0 токенов)")));
+    }
+
+    #[test]
+    fn copied_notice_expires_without_changing_other_toasts() {
+        let mut renderer = Renderer::new(io::stdout(), 80, 24, ColorMode::None, false);
+        let mut status = Status {
+            copied_chars: Some(12),
+            toast: Some("Другое уведомление".into()),
+            ..Status::default()
+        };
+        let mut deadline = Some(Instant::now() - Duration::from_millis(1));
+        assert!(update_copy_notice(&mut renderer, &mut status, &mut deadline).unwrap());
+        assert_eq!(status.copied_chars, None);
+        assert_eq!(status.toast.as_deref(), Some("Другое уведомление"));
+        assert!(!update_copy_notice(&mut renderer, &mut status, &mut deadline).unwrap());
     }
 }

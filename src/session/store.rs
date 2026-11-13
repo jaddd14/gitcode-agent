@@ -175,7 +175,29 @@ impl SessionStore {
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| invalid("non-UTF-8 session identifier"))?;
-            let session = self.resume(id)?;
+            let mut session = self.resume(id)?;
+            if matches!(
+                session.metadata.title.as_str(),
+                "gitcode session" | "New conversation"
+            ) {
+                if let Some(title) = session
+                    .messages
+                    .iter()
+                    .find(|message| message.role == crate::provider::canonical::Role::User)
+                    .and_then(|message| {
+                        message.content.iter().find_map(|content| match content {
+                            crate::provider::canonical::Content::Text { text }
+                                if !text.trim().is_empty() =>
+                            {
+                                Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+                            }
+                            _ => None,
+                        })
+                    })
+                {
+                    session.metadata.title = title.chars().take(100).collect();
+                }
+            }
             result.push(SessionSummary {
                 id: session.id,
                 metadata: session.metadata,

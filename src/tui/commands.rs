@@ -29,6 +29,7 @@ pub fn description(name: &str) -> &'static str {
         "compact" => "Сократить результаты инструментов",
         "config" => "Параметры конфигурации",
         "model" => "Выбрать модель",
+        "effort" => "Уровень рассуждения",
         "provider" => "Настройки провайдера",
         "usage" => "Использование токенов по периодам",
         "cost" => "Стоимость текущей сессии",
@@ -64,7 +65,7 @@ pub fn description(name: &str) -> &'static str {
 /// Semantic category used as a redundant textual chip.
 pub fn category(name: &str) -> &'static str {
     match name {
-        "model" | "provider" => "модель",
+        "model" | "provider" | "effort" => "модель",
         "context" | "compact" | "memory" | "add-dir" => "контекст",
         "diff" | "commit" | "review" => "git",
         "agents" | "mcp" | "skills" | "hooks" => "инструменты",
@@ -89,24 +90,37 @@ pub fn candidates(text: &str) -> Vec<SlashCommandInfo> {
 /// Bounded command overlay immediately above the input.
 pub fn popup(text: &str, selected: usize, width: usize, capacity: usize) -> Vec<String> {
     let choices = candidates(text);
-    let rows = choices
-        .iter()
-        .map(|command| {
-            format!(
-                "/{}  {}  [{}]",
-                command.name,
-                command.description,
-                category(&command.name)
-            )
-        })
-        .collect::<Vec<_>>();
-    let body = super::widgets::list(&rows, selected, capacity, width.saturating_sub(2));
-    super::widgets::Frame {
-        title: "Команды",
-        footer: "↑↓ выбор · tab вставить · enter выполнить · esc закрыть",
-        glyphs: super::widgets::Glyphs::detect(),
+    let theme = crate::theme::Theme::default();
+    let mode = crate::theme::ColorMode::None;
+    let mut rows = vec![super::picker::heading("  Команды", width, &theme, mode)];
+    if capacity >= 5 {
+        rows.push(String::new());
     }
-    .render(&body, width)
+    let reserved = if capacity >= 5 { 4 } else { 2 };
+    let available = capacity.saturating_sub(reserved).max(1);
+    let start = (selected + 1).saturating_sub(available);
+    for (index, command) in choices.iter().enumerate().skip(start).take(available) {
+        let primary = format!("/{} ", command.name);
+        let description = format!(" {}  [{}]", command.description, category(&command.name));
+        rows.push(super::picker::choice(
+            index == selected,
+            &primary,
+            &description,
+            width,
+            &theme,
+            mode,
+        ));
+    }
+    if capacity >= 5 {
+        rows.push(String::new());
+    }
+    rows.push(super::picker::text(
+        "  ↑↓ выбор   tab вставить   enter выполнить   esc закрыть",
+        width,
+        theme.placeholder,
+        mode,
+    ));
+    super::picker::constrain(rows, capacity)
 }
 
 fn home_dir(fallback: &Path) -> PathBuf {
@@ -238,7 +252,7 @@ pub fn history_card(history: &[String], current: &str, width: usize) -> Vec<Stri
 }
 
 /// Execute any built-in slash command and return its rendered `Card` rows (or `None` when `prompt`
-/// is not a slash command). Every one of the 34 built-in commands (`BUILTIN_COMMANDS` + `/new`)
+/// is not a slash command). Built-in commands (`BUILTIN_COMMANDS` + `/new`)
 /// produces a structured card with real workspace/session data.
 pub async fn execute_command(
     prompt: &str,
@@ -294,6 +308,7 @@ pub async fn execute_command(
             name,
             "config"
                 | "model"
+                | "effort"
                 | "resume"
                 | "rewind"
                 | "plan"
@@ -419,7 +434,7 @@ pub async fn execute_command(
             if !args.is_empty() {
                 agent.model = args.into();
                 status.model = agent.model.clone();
-                status.toast = Some(format!("Модель: {}", agent.model));
+                status.toast = None;
             }
             let presets = [
                 ("claude-sonnet-4-20250514", "Anthropic · код и агенты"),
@@ -437,6 +452,31 @@ pub async fn execute_command(
                 body.push(format!(" {mark} {id:<26} {note}"));
             }
             "/model <имя-модели> сменить"
+        }
+        "effort" => {
+            if !args.is_empty() {
+                let requested = args.to_ascii_lowercase();
+                let value = if requested == "default" {
+                    None
+                } else {
+                    Some(requested.as_str())
+                };
+                match agent.client.set_effort(value) {
+                    Ok(()) => {
+                        status.effort = agent.client.effort().map(str::to_owned);
+                    }
+                    Err(_) => body.push(
+                        "Неизвестный уровень. Доступны default, low, medium, high, xhigh, max."
+                            .into(),
+                    ),
+                }
+            }
+            body.push(format!(
+                "Текущий effort: {}",
+                agent.client.effort().unwrap_or("default")
+            ));
+            body.push("Доступны: default, low, medium, high, xhigh, max. Поддержка зависит от модели и провайдера.".into());
+            "/effort <уровень>"
         }
         "provider" => {
             body.extend([

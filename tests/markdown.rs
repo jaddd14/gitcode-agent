@@ -429,3 +429,16 @@ fn prose_uses_terminal_foreground_while_accent_colors_are_preserved() {
     let plain = parser.render(100, &theme, ColorMode::None).join("\n");
     assert!(!plain.contains('\x1b'));
 }
+
+#[test]
+fn runs_of_blank_source_lines_render_as_one_separator() {
+    let rows = plain(&parse("Первый шаг.\n\n\n\nВторой шаг.\n\n\n"), 40);
+    assert_eq!(rows.first().map(String::as_str), Some("Первый шаг."));
+    assert!(rows.iter().any(|row| row == "Второй шаг."));
+    assert!(
+        !rows
+            .windows(2)
+            .any(|pair| pair[0].is_empty() && pair[1].is_empty()),
+        "{rows:?}"
+    );
+}

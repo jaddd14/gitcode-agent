@@ -2,6 +2,21 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-11-12
+
+### Fixed
+
+- Tool calls whose arguments arrive as several complete JSON objects in one streamed block are now expanded into separate calls instead of failing with `invalid tool argument JSON`; the silent whole-request retry that masked the lost call is gone.
+- A held mouse selection keeps extending while the wheel scrolls the conversation, including the automatic edge scroll at the top and bottom of the viewport.
+- The slash-command popup stays closed for pasted text, paths, multi-line input and commands with arguments.
+- `2>/dev/null`, `>/dev/null` and `2>&1` pass the conservative Bash splitter; every other redirect still fails closed.
+- Runs of blank lines between blocks collapse into a single separator, so model-emitted extra newlines no longer open wide gaps in the transcript.
+
+### Changed
+
+- Model guidance now asks for one short sentence before the first tool call and at direction changes, and for an outcome-first final message.
+- Startup header lists a shorter command set, two releases, and a smaller emblem shifted left so it is not clipped on narrow terminals.
+
 ## [0.2.1] - 2026-11-08
 
 ### Fixed

@@ -2,7 +2,7 @@
 
 /// Guarded, atomic workspace editing primitives.
 pub mod editing;
-/// Persistent non-interactive Bash sessions and conservative command splitting.
+/// Persistent non-interactive Bash sessions and permission checks.
 pub mod shell;
 
 use crate::{
@@ -29,6 +29,7 @@ pub struct Tools {
     /// Monotonic counter for background shell job identifiers.
     next_job_id: u64,
     todos: crate::agent::agency::TodoList,
+    approved_shell_prefixes: Vec<String>,
 }
 
 impl Tools {
@@ -41,6 +42,7 @@ impl Tools {
             jobs: BTreeMap::new(),
             next_job_id: 1,
             todos: crate::agent::agency::TodoList::new(),
+            approved_shell_prefixes: Vec::new(),
         }
     }
 
@@ -84,7 +86,7 @@ impl Tools {
             tool(
                 "Bash",
                 "Execute a command in a persistent non-interactive Bash session.",
-                json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600},"run_in_background":{"type":"boolean"}}),
+                json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1},"run_in_background":{"type":"boolean"}}),
                 &["command"],
             ),
             tool(
@@ -111,16 +113,77 @@ impl Tools {
         Ok(session)
     }
 
+    /// Remove remembered command approvals when a new conversation starts.
+    pub fn clear_shell_approvals(&mut self) {
+        self.approved_shell_prefixes.clear();
+    }
+
+    /// Whether this single command matches a remembered prefix and has no explicit ask rule.
+    pub fn shell_is_remembered(&self, command: &str) -> bool {
+        shell::similar_prefix(command).is_some_and(|prefix| {
+            self.approved_shell_prefixes.contains(&prefix)
+                && !self.permissions.explicitly_asks("Bash", command)
+        })
+    }
+
+    /// Remember the displayed prefix for this conversation only.
+    pub fn remember_shell_prefix(&mut self, command: &str) {
+        if let Some(prefix) = shell::similar_prefix(command) {
+            if !self.approved_shell_prefixes.contains(&prefix) {
+                self.approved_shell_prefixes.push(prefix);
+            }
+        }
+    }
+
     /// Execute a validated operation; errors become model-visible tool results.
     pub async fn execute(&mut self, name: &str, input: &Value) -> Result<String, String> {
+        self.execute_inner(name, input, false).await
+    }
+
+    /// Execute the exact Bash invocation explicitly approved by the operator.
+    pub async fn execute_approved_shell(&mut self, input: &Value) -> Result<String, String> {
+        self.execute_inner("Bash", input, true).await
+    }
+
+    /// Execute one explicitly approved tool invocation while retaining deny and plan rules.
+    pub async fn execute_approved_tool(
+        &mut self,
+        name: &str,
+        input: &Value,
+    ) -> Result<String, String> {
+        if !matches!(
+            name,
+            "Write"
+                | "Edit"
+                | "MultiEdit"
+                | "NotebookEdit"
+                | "apply_patch"
+                | "WebFetch"
+                | "McpCall"
+        ) {
+            return Err("tool does not support interactive approval".into());
+        }
+        self.execute_inner(name, input, true).await
+    }
+
+    async fn execute_inner(
+        &mut self,
+        name: &str,
+        input: &Value,
+        approved: bool,
+    ) -> Result<String, String> {
         match name {
             "TodoWrite" => return self.todos.update_from_value(input),
             "McpCall" => {
                 let server = required(input, "server")?.to_owned();
                 let tool = required(input, "tool")?.to_owned();
                 let resource = crate::mcp::qualify_tool_name(&server, &tool)?;
-                if self.permissions.decide("McpCall", &resource, true) != Decision::Allow {
-                    return Err("MCP execution denied or requires approval".into());
+                match self.permissions.decide("McpCall", &resource, true) {
+                    Decision::Deny => return Err("permission denied by policy".into()),
+                    Decision::Ask if !approved => {
+                        return Err("permission requires explicit approval".into())
+                    }
+                    _ => {}
                 }
                 let arguments = input
                     .get("arguments")
@@ -160,8 +223,12 @@ impl Tools {
             }
             "WebFetch" => {
                 let url = required(input, "url")?;
-                if self.permissions.decide("WebFetch", url, true) != Decision::Allow {
-                    return Err("network permission denied or requires approval".into());
+                match self.permissions.decide("WebFetch", url, true) {
+                    Decision::Deny => return Err("permission denied by policy".into()),
+                    Decision::Ask if !approved => {
+                        return Err("permission requires explicit approval".into())
+                    }
+                    _ => {}
                 }
                 return crate::web_git::WebFetcher::new(
                     crate::web_git::DomainPolicy::default(),
@@ -194,16 +261,26 @@ impl Tools {
             }
             "Bash" => {
                 let command = required(input, "command")?;
-                let secs = input["timeout_seconds"]
+                let mut shell_permissions = self.permissions.clone();
+                if approved {
+                    if shell::permission_decision(&shell_permissions, command)? == Decision::Deny {
+                        return Err("permission denied by policy".into());
+                    }
+                    // Approval applies only to this invocation; deny and plan restrictions remain.
+                    shell_permissions.ask.clear();
+                    shell_permissions
+                        .allow
+                        .push(crate::perm::Rule::parse("Bash(**)")?);
+                }
+                let timeout = input["timeout_seconds"]
                     .as_u64()
-                    .unwrap_or(120)
-                    .clamp(1, 600);
-                let timeout = Duration::from_secs(secs);
+                    .map(Duration::from_secs)
+                    .unwrap_or(Duration::MAX);
                 if input["run_in_background"].as_bool().unwrap_or(false) {
                     let bg_session =
                         shell::Session::new(&self.permissions, &self.permissions.root)?;
                     let job = bg_session
-                        .background(&self.permissions, command, timeout)
+                        .background(&shell_permissions, command, timeout)
                         .await?;
                     let job_id = format!("job-{}", self.next_job_id);
                     self.next_job_id += 1;
@@ -211,7 +288,9 @@ impl Tools {
                     return Ok(format!("Started background shell job {job_id}"));
                 }
                 let session = self.ensure_shell()?;
-                let out = session.execute(&self.permissions, command, timeout).await?;
+                let out = session
+                    .execute(&shell_permissions, command, timeout)
+                    .await?;
                 let mut text = out.output;
                 if out.timed_out {
                     text.push_str("\n[command timed out]");
@@ -267,7 +346,15 @@ impl Tools {
             name,
             "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "apply_patch"
         ) {
-            let permissions = self.permissions.clone();
+            let mut permissions = self.permissions.clone();
+            if approved {
+                permissions
+                    .ask
+                    .retain(|rule| rule.tool != name && rule.tool != "*");
+                permissions
+                    .allow
+                    .push(crate::perm::Rule::parse(&format!("{name}(**)"))?);
+            }
             let mut state = self.read_state.clone();
             let name = name.to_owned();
             let input = input.clone();
@@ -334,9 +421,7 @@ impl Tools {
                     .enumerate()
                     .skip(offset - 1)
                     .take(limit)
-                    .map(|(i, line)| {
-                        format!("{}\t{}", i + 1, line.chars().take(2000).collect::<String>())
-                    })
+                    .map(|(i, line)| format!("{}\t{line}", i + 1))
                     .collect::<Vec<_>>()
                     .join("\n");
                 self.read_state.insert(path, bytes);

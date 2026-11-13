@@ -221,9 +221,12 @@ pub fn style_frame_row_with_panel(
             reset(mode)
         );
     }
-    if ["  ● ", "  ✓ ", "  × ", "  * ", "  + ", "  x "]
-        .iter()
-        .any(|prefix| row.starts_with(prefix))
+    if [
+        "  ○ ", "  ◔ ", "  ◑ ", "  ◕ ", "  ● ", "  ✓ ", "  × ", "  * ", "  o ", "  O ", "  @ ",
+        "  + ", "  x ",
+    ]
+    .iter()
+    .any(|prefix| row.starts_with(prefix))
     {
         let marker_end = row[2..].chars().next().map_or(2, |c| 2 + c.len_utf8());
         return format!(
@@ -286,6 +289,11 @@ pub fn style_frame_row_with_panel(
         return format!("{border}{row}{reset}");
     }
     if bottom && row.contains("shift+tab") {
+        let label_color = if row.contains("BYPASS") {
+            foreground(theme.warn, mode)
+        } else {
+            panel_text.clone()
+        };
         let shift = row.find("shift+tab").unwrap_or(row.len());
         let label = row[..shift].rfind(['─', '-']).map_or(shift, |index| {
             index + row[index..].chars().next().map_or(0, char::len_utf8)
@@ -299,7 +307,7 @@ pub fn style_frame_row_with_panel(
             let color = if position < 4 {
                 &rose
             } else if label <= index && index < label_end {
-                &panel_text
+                &label_color
             } else {
                 &border
             };
@@ -691,10 +699,15 @@ mod tests {
     }
 
     #[test]
-    fn mode_and_shortcut_are_gray_for_every_permission_mode() {
+    fn bypass_mode_and_shortcut_are_yellow_other_modes_gray() {
         let theme = Theme::default();
         let gray = foreground(theme.panel_text, ColorMode::TrueColor);
         for label in ["DEFAULT", "ACCEPT EDITS", "PLAN", "BYPASS"] {
+            let gray = if label == "BYPASS" {
+                foreground(theme.warn, ColorMode::TrueColor)
+            } else {
+                gray.clone()
+            };
             let row = format!("╰──────── {label} · shift+tab ╯");
             let styled = style_frame_row(&row, &theme, ColorMode::TrueColor);
             for ch in format!("{label} · shift+tab").chars() {

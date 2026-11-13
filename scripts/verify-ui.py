@@ -146,8 +146,8 @@ def main():
                         check(f"usage {state} {period} card", "Использование" in usage)
                         expected_requests = (3, 2, 5, 9, 10)[index] if state == "seeded" else 0
                         check(f"usage {state} {period} request count", f"Запросы: {expected_requests} ·" in usage)
-                        if width != 40:
-                            check(f"usage {state} {period} full frame", "╭" in usage and "╰" in usage)
+                        check(f"usage {state} {period} borderless title", not any(
+                            "Использование" in line and "╭" in line for line in usage.splitlines()))
                         if state == "seeded" and width != 40:
                             check(f"usage seeded {period} data", "ui-priced" in usage and "ui-reviewer" in usage)
                     keys("t")

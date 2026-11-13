@@ -197,7 +197,8 @@ fn busy_activity_and_retry_notice_render_above_prompt_box() {
     };
     let frame = Frame::input(&editor, &status, 80, 24);
     assert!(frame.lines[0].starts_with('▲'));
-    assert!(frame.lines[1].contains("Думаю… (9с · ↓ 1.4k токенов)"));
+    assert!(frame.lines[1].is_empty());
+    assert!(frame.lines[2].contains("Думаю… (9с · ↓ 1.4k токенов)"));
     assert!(!frame.lines.iter().any(|l| l.contains("В очереди")));
     assert!(frame.lines.iter().all(|l| l.width() <= 80));
 }

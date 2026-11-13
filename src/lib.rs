@@ -4,6 +4,7 @@ pub mod agent;
 pub mod brand;
 pub mod config;
 pub mod credentials;
+pub mod effort_preferences;
 pub mod error;
 pub mod extensibility;
 pub mod headless;

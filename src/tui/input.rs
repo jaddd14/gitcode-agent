@@ -70,8 +70,21 @@ impl Editor {
         &self.text
     }
     /// Whether slash completion should be visible without any IO.
+    ///
+    /// Only a bare command name opens the menu: `/`, `/usa`, or `/usage` while the
+    /// name is still being typed. Anything else that merely starts with a slash —
+    /// a pasted path, a multi-line paste, or `команда аргументы` — is an ordinary
+    /// prompt and must not summon a command list.
     pub fn completion_open(&self) -> bool {
-        self.text.starts_with('/') && !self.completion_closed
+        if self.completion_closed {
+            return false;
+        }
+        let trimmed = self.text.trim_end();
+        let Some(name) = trimmed.strip_prefix('/') else {
+            return false;
+        };
+        name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !super::commands::candidates(trimmed).is_empty()
     }
     /// Current bounded slash selection.
     pub fn completion_selected(&self) -> usize {

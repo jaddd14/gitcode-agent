@@ -27,10 +27,13 @@ impl Decoder {
         }
         self.pending.extend_from_slice(bytes);
         let mut result = Vec::new();
-        while let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
-            let line: Vec<_> = self.pending.drain(..=end).collect();
+        let pending = std::mem::take(&mut self.pending);
+        let mut start = 0;
+        while let Some(offset) = pending[start..].iter().position(|b| *b == b'\n') {
+            let end = start + offset;
             let line =
-                std::str::from_utf8(&line[..line.len() - 1]).map_err(|_| "invalid SSE UTF-8")?;
+                std::str::from_utf8(&pending[start..end]).map_err(|_| "invalid SSE UTF-8")?;
+            start = end + 1;
             let line = line.strip_suffix('\r').unwrap_or(line);
             if line.is_empty() {
                 if !self.data.is_empty() {
@@ -42,19 +45,25 @@ impl Decoder {
                 }
                 self.event.clear();
                 self.size = 0;
-            } else if !line.starts_with(':') {
+            } else {
+                // Account for every byte of the record, including comments and empty
+                // data fields. Counting only data values permits unbounded buffering.
+                self.size = self.size.saturating_add(offset + 1);
+                if line.starts_with(':') {
+                    continue;
+                }
                 let (field, value) = line.split_once(':').unwrap_or((line, ""));
                 let value = value.strip_prefix(' ').unwrap_or(value);
                 match field {
                     "event" => self.event = value.into(),
                     "data" => {
-                        self.size += value.len();
                         self.data.push(value.into());
                     }
                     _ => {}
                 }
             }
         }
+        self.pending.extend_from_slice(&pending[start..]);
         Ok(result)
     }
 
@@ -97,5 +106,15 @@ mod tests {
         decoder.push(b"data: incomplete").unwrap();
         assert!(decoder.finish().is_err());
         assert!(Decoder::default().push(b"data: \xff\n\n").is_err());
+    }
+
+    #[test]
+    fn many_empty_data_fields_cannot_bypass_record_limit() {
+        let chunk = b"data:\n".repeat(200_000);
+        let mut decoder = Decoder::default();
+        for _ in 0..6 {
+            decoder.push(&chunk).unwrap();
+        }
+        assert!(decoder.push(&chunk).is_err());
     }
 }

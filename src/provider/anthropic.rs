@@ -47,6 +47,29 @@ struct Block {
     initial: Option<Value>,
 }
 
+/// Decode the buffered argument fragments of one tool block.
+///
+/// Compliant providers stream a single JSON object. Some compatible relays emit
+/// several complete objects for one block, which concatenates to `{..}{..}`.
+/// Each complete value is returned so no call is silently dropped.
+fn parse_arguments(input: &str, initial: Option<Value>) -> Result<Vec<Value>, String> {
+    if input.trim().is_empty() {
+        return Ok(vec![initial.unwrap_or_else(|| json!({}))]);
+    }
+    let mut values = Vec::new();
+    let mut stream = serde_json::Deserializer::from_str(input).into_iter::<Value>();
+    for value in &mut stream {
+        values.push(value.map_err(|_| "invalid tool argument JSON")?);
+        if values.len() > 64 {
+            return Err("tool block contains too many argument objects".into());
+        }
+    }
+    if values.is_empty() {
+        return Err("invalid tool argument JSON".into());
+    }
+    Ok(values)
+}
+
 /// Decoder preserves argument fragments until a block closes successfully.
 #[derive(Default)]
 pub struct Stream {
@@ -183,20 +206,24 @@ impl Stream {
                     });
                 }
                 if let Some(block) = self.blocks.remove(&index) {
-                    let input = if block.input.is_empty() {
-                        block.initial.unwrap_or(json!({}))
-                    } else {
-                        serde_json::from_str(&block.input)
-                            .map_err(|_| "invalid tool argument JSON")?
-                    };
-                    if !input.is_object() {
-                        return Err("tool arguments must be a JSON object".into());
+                    let arguments = parse_arguments(&block.input, block.initial)?;
+                    let multiple = arguments.len() > 1;
+                    for (position, input) in arguments.into_iter().enumerate() {
+                        if !input.is_object() {
+                            return Err("tool arguments must be a JSON object".into());
+                        }
+                        output.push(Event::ToolCall {
+                            // Some relays pack several calls into one block without
+                            // distinct ids; keep every result addressable.
+                            id: if multiple {
+                                format!("{}-{}", block.id, position + 1)
+                            } else {
+                                block.id.clone()
+                            },
+                            name: block.name.clone(),
+                            input,
+                        });
                     }
-                    output.push(Event::ToolCall {
-                        id: block.id,
-                        name: block.name,
-                        input,
-                    });
                 }
             }
             "message_delta" => {

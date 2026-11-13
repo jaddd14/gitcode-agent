@@ -274,3 +274,50 @@ fn successful_turn_clears_agent_rows_only_when_generation_finishes() {
         .iter()
         .any(|line| line.contains("explore")));
 }
+
+#[test]
+fn running_subagent_fills_smoothly_but_finished_mark_stays_fixed() {
+    use crate::{
+        agent::agency::{SubagentRun, SubagentRunState},
+        tui::{input::Editor, render::Frame},
+    };
+    let run = SubagentRun {
+        id: "id".into(),
+        name: "explore".into(),
+        task: "task".into(),
+        current_tool: None,
+        tokens: 0,
+        elapsed_ms: 0,
+        state: SubagentRunState::Running,
+    };
+    let mut status = Status {
+        busy: true,
+        subagents: vec![run],
+        ..Status::default()
+    };
+    let first = Frame::input(&Editor::default(), &status, 80, 20)
+        .lines
+        .into_iter()
+        .find(|row| row.contains("explore"))
+        .unwrap();
+    status.elapsed_millis = 500;
+    let second = Frame::input(&Editor::default(), &status, 80, 20)
+        .lines
+        .into_iter()
+        .find(|row| row.contains("explore"))
+        .unwrap();
+    assert_ne!(first, second);
+    status.subagents[0].state = SubagentRunState::Completed;
+    let done = Frame::input(&Editor::default(), &status, 80, 20)
+        .lines
+        .into_iter()
+        .find(|row| row.contains("explore"))
+        .unwrap();
+    status.elapsed_millis = 1000;
+    let done_later = Frame::input(&Editor::default(), &status, 80, 20)
+        .lines
+        .into_iter()
+        .find(|row| row.contains("explore"))
+        .unwrap();
+    assert_eq!(done, done_later);
+}

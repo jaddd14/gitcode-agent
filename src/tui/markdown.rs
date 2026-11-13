@@ -427,6 +427,16 @@ impl Markdown {
     }
 
     fn add(&mut self, kind: Kind, prefix: &str, spans: Vec<Span>, cells: Vec<Vec<Span>>) {
+        // Consecutive empty source lines are a single visual separator: models
+        // emit runs of newlines between calls and they must not stretch the view.
+        if kind == Kind::Blank
+            && self
+                .lines
+                .last()
+                .is_some_and(|line| line.kind == Kind::Blank)
+        {
+            return;
+        }
         self.lines.push(Line {
             kind,
             prefix: prefix.to_owned(),

@@ -79,6 +79,59 @@ fn layers_environment_cli_and_unknown_keys() {
 }
 
 #[test]
+fn project_cannot_redirect_user_credentials_or_expand_secrets_without_user_trust() {
+    let fixture = Fixture::new();
+    let home = fixture.0.join("home");
+    let project = fixture.0.join("project");
+    std::fs::create_dir_all(home.join(".gitcode")).unwrap();
+    std::fs::create_dir_all(project.join(".gitcode")).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    std::fs::write(home.join(".gitcode/config.toml"), "[provider]\nbase_url = 'https://trusted.example.invalid'\napi_key_env = 'FIXTURE_PRIVATE_KEY'\n").unwrap();
+    let project_config = project.join(".gitcode/config.toml");
+    std::fs::write(
+        &project_config,
+        format!(
+            "[provider]\nbase_url = 'http://{}'\n",
+            listener.local_addr().unwrap()
+        ),
+    )
+    .unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_gitcode"))
+        .args(["-p", "fixture"])
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FIXTURE_PRIVATE_KEY", "fixture-only-secret")
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        listener.accept().is_err(),
+        "untrusted project redirected credentials"
+    );
+    let env = BTreeMap::from([("FIXTURE_PRIVATE_KEY".into(), "fixture-only-secret".into())]);
+    std::fs::write(&project_config, "model = '${FIXTURE_PRIVATE_KEY}'\n").unwrap();
+    assert!(config::load(&home, &project, &env, &Overrides::new()).is_err());
+    std::fs::write(&project_config, "trust_project_config = true\n").unwrap();
+    assert!(config::load(&home, &project, &env, &Overrides::new()).is_err());
+    std::fs::write(
+        home.join(".gitcode/config.toml"),
+        "trust_project_config = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &project_config,
+        "model = '${FIXTURE_PRIVATE_KEY}'\n[provider]\nbase_url = 'https://project.example'\n",
+    )
+    .unwrap();
+    let trusted = config::load(&home, &project, &env, &Overrides::new()).unwrap();
+    assert_eq!(trusted.provider.base_url, "https://project.example");
+    assert_eq!(trusted.model, "fixture-only-secret");
+}
+
+#[test]
 fn credential_resolution_prefers_environment_and_fails_closed() {
     let fixture = Fixture::new();
     let home = fixture.0.join("home");
@@ -145,7 +198,7 @@ fn executable_uses_stored_credentials_without_polluting_stdout() {
     std::fs::create_dir_all(&store).unwrap();
     std::fs::create_dir_all(project.join(".gitcode")).unwrap();
     std::fs::write(
-        project.join(".gitcode/config.toml"),
+        home.join(".gitcode/config.toml"),
         "[provider]\napi_key_env = 'ISOLATED_CREDENTIAL'\n",
     )
     .unwrap();
@@ -209,7 +262,7 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         std::fs::write(
-            project.join(".gitcode/config.toml"),
+            home.join(".gitcode/config.toml"),
             format!("[provider]\napi_key_env = 'ISOLATED_HTTP_KEY'\nbase_url = 'http://{address}'\ntimeout_seconds = 5\n"),
         )
         .unwrap();
@@ -364,12 +417,22 @@ fn private_credentials_and_redacted_json_logs() {
         .all(|line| serde_json::from_str::<serde_json::Value>(line).is_ok()));
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{symlink, PermissionsExt};
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(credentials::read(&path).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = fixture.0.join("credential-link");
+        symlink(&path, &link).unwrap();
+        assert!(credentials::read(&link).is_err());
+        std::fs::remove_file(&link).unwrap();
+        std::fs::hard_link(&path, &link).unwrap();
+        assert!(credentials::read(&path).is_err());
+        let log_link = fixture.0.join("log-link");
+        std::fs::hard_link(&log, &log_link).unwrap();
+        assert!(Logger::open(&log, vec![]).is_err());
     }
 }

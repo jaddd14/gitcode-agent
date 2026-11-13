@@ -47,7 +47,7 @@ impl BuiltinSlashSpec {
     }
 }
 
-/// Complete registry of all 33 built-in slash commands.
+/// Complete registry of built-in slash commands.
 pub const BUILTIN_COMMANDS: &[BuiltinSlashSpec] = &[
     BuiltinSlashSpec {
         name: "help",
@@ -73,6 +73,11 @@ pub const BUILTIN_COMMANDS: &[BuiltinSlashSpec] = &[
         name: "model",
         description: "View or switch the active language model",
         argument_hint: Some("[model-id]"),
+    },
+    BuiltinSlashSpec {
+        name: "effort",
+        description: "Choose the reasoning effort for model requests",
+        argument_hint: Some("[default|low|medium|high|xhigh|max]"),
     },
     BuiltinSlashSpec {
         name: "provider",

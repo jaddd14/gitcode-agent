@@ -126,21 +126,31 @@ fn header_plain_snapshot_news_spacing_and_pixel_geometry() {
         branch: "main",
     };
     let lines = h.lines(140, &Theme::default(), ColorMode::None);
-    assert!(lines.iter().all(|line| !line.contains("gitcode v")));
+    assert!(lines.iter().all(|line| !line.contains("gitcode")));
+    assert!(lines
+        .iter()
+        .all(|line| !line.contains("/help · все команды")));
     assert!(!lines[0].contains('╭'));
     assert!(lines
         .iter()
         .all(|line| !line.contains('╰') && !line.contains('╯')));
-    assert!(lines
-        .iter()
-        .any(|line| line.contains("/model — выбрать модель")));
-    assert!(lines
-        .iter()
-        .any(|line| line.contains("/context — состав контекста")));
+    assert!(lines.iter().any(|line| line.contains("КОМАНДЫ")));
+    for (version, _) in gitcode::tui::header::NEWS {
+        assert!(lines.iter().any(|line| line.contains(version)));
+    }
+    let bullet = if gitcode::tui::widgets::Glyphs::detect().ascii {
+        "*"
+    } else {
+        "●"
+    };
+    assert_eq!(lines.iter().filter(|line| line.contains(bullet)).count(), 2);
+    assert!(lines.iter().any(|line| line.contains("ПОСЛЕДНИЕ ВЕРСИИ")));
+    assert!(lines.iter().any(|line| line.contains("0.2.2")));
+    assert!(lines.iter().all(|line| !line.contains('│')));
     assert!(lines
         .iter()
         .take(lines.len() - HEADER_GAP)
-        .all(|s| unicode_width::UnicodeWidthStr::width(s.as_str()) == 96));
+        .all(|s| unicode_width::UnicodeWidthStr::width(s.as_str()) == 140));
     assert!(lines[lines.len() - HEADER_GAP..]
         .iter()
         .all(String::is_empty));

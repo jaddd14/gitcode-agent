@@ -1,40 +1,73 @@
 //! Local palette selection with live preview and explicit confirmation.
 
 use super::{
+    picker,
     render::{Frame, Renderer},
-    widgets,
 };
-use crate::theme::{self, RosePreset, Theme, ThemeChoice, WhiteMode};
+use crate::theme::{self, ColorMode, RosePreset, Theme, ThemeChoice, WhiteMode};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use std::io;
 
-fn rows(choice: ThemeChoice, selected: usize, width: usize) -> Vec<String> {
-    let mut body = vec!["Тема терминала".into(), String::new()];
-    for (index, preset) in RosePreset::ALL.iter().enumerate() {
-        body.push(format!(
-            "{} {}{}",
-            if index == selected { "›" } else { " " },
+fn rows(
+    choice: ThemeChoice,
+    selected: usize,
+    width: usize,
+    height: usize,
+    mode: ColorMode,
+) -> Vec<String> {
+    let theme = Theme::from_choice(choice);
+    let mut out = vec![
+        picker::heading("  Тема терминала", width, &theme, mode),
+        String::new(),
+    ];
+    let capacity = height.saturating_sub(5).max(1);
+    let start = (selected + 1).saturating_sub(capacity);
+    for (index, preset) in RosePreset::ALL
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(capacity)
+    {
+        let label = format!(
+            "{}. {}{}",
+            index + 1,
             preset.label(),
             if *preset == choice.preset {
                 " · выбрана"
             } else {
                 ""
             }
+        );
+        out.push(picker::choice(
+            index == selected,
+            &label,
+            "",
+            width,
+            &theme,
+            mode,
         ));
     }
-    body.push(String::new());
-    body.push(format!(
-        "Белый в diff: {}",
-        match choice.white {
-            WhiteMode::Soft => "мягкий",
-            WhiteMode::Pure => "чистый",
-        }
+    out.push(String::new());
+    out.push(picker::text(
+        &format!(
+            "  Белый в diff: {}",
+            match choice.white {
+                WhiteMode::Soft => "мягкий",
+                WhiteMode::Pure => "чистый",
+            }
+        ),
+        width,
+        theme.placeholder,
+        mode,
     ));
-    body.push("↑↓ тема · tab/←→ белый в diff · enter сохранить · esc отмена".into());
-    body.into_iter()
-        .map(|line| widgets::fit(&line, width))
-        .collect()
+    out.push(picker::text(
+        "  ↑↓ тема   tab белый в diff   enter сохранить   esc назад",
+        width,
+        theme.placeholder,
+        mode,
+    ));
+    picker::constrain(out, height)
 }
 
 /// Preview choices immediately; cancellation restores the previous runtime palette.
@@ -52,11 +85,14 @@ pub async fn select(
         loop {
             renderer.set_theme(Theme::from_choice(choice));
             let (width, height) = renderer.size();
-            let lines = rows(choice, selected, width.saturating_sub(1))
-                .into_iter()
-                .take(height)
-                .collect();
-            renderer.paint(&Frame {
+            let lines = rows(
+                choice,
+                selected,
+                width.saturating_sub(1),
+                picker::height(height),
+                renderer.color_mode(),
+            );
+            renderer.paint_styled(&Frame {
                 lines,
                 cursor: None,
             })?;
@@ -95,7 +131,7 @@ mod tests {
     use super::*;
     #[test]
     fn exposes_four_presets_and_white_mode() {
-        let body = rows(ThemeChoice::default(), 0, 100).join("\n");
+        let body = rows(ThemeChoice::default(), 0, 100, 20, ColorMode::None).join("\n");
         for preset in RosePreset::ALL {
             assert!(body.contains(preset.label()));
         }
@@ -104,11 +140,15 @@ mod tests {
             white: WhiteMode::Soft,
             ..ThemeChoice::default()
         };
-        assert!(rows(soft, 0, 100).join("\n").contains("мягкий"));
+        assert!(rows(soft, 0, 100, 20, ColorMode::None)
+            .join("\n")
+            .contains("мягкий"));
         let pure = ThemeChoice {
             white: WhiteMode::Pure,
             ..ThemeChoice::default()
         };
-        assert!(rows(pure, 0, 100).join("\n").contains("чистый"));
+        assert!(rows(pure, 0, 100, 20, ColorMode::None)
+            .join("\n")
+            .contains("чистый"));
     }
 }

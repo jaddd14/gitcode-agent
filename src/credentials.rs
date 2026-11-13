@@ -1,7 +1,13 @@
 //! Private credential storage with deliberately redacted formatting.
 
 use crate::error::{io, Result};
-use std::{collections::BTreeMap, fmt, fs::OpenOptions, io::Write, path::Path};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    fs::OpenOptions,
+    io::{Read, Write},
+    path::Path,
+};
 
 /// Resolve an environment credential first, then its private file under the user home.
 /// Missing files mean unauthenticated access; unsafe or unreadable files fail closed.
@@ -98,13 +104,39 @@ pub fn create(path: &Path, secret: &Secret) -> Result<()> {
 
 /// Read a private, regular credential file, rejecting permissive Unix modes.
 pub fn read(path: &Path) -> Result<Secret> {
-    let metadata =
-        std::fs::symlink_metadata(path).map_err(|e| io("inspect credential", path, e))?;
-    let mut allowed = metadata.is_file() && !metadata.file_type().is_symlink();
+    let mut options = OpenOptions::new();
+    options.read(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        allowed &= metadata.permissions().mode() & 0o077 == 0;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if std::fs::symlink_metadata(path)
+        .map_err(|e| io("inspect credential", path, e))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(io(
+            "inspect credential",
+            path,
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "credential must not be a symlink",
+            ),
+        ));
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|e| io("open credential", path, e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| io("inspect credential", path, e))?;
+    let mut allowed = metadata.is_file();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        allowed &= metadata.permissions().mode() & 0o077 == 0 && metadata.nlink() == 1;
     }
     if !allowed {
         return Err(io(
@@ -116,7 +148,9 @@ pub fn read(path: &Path) -> Result<Secret> {
             ),
         ));
     }
-    let text = std::fs::read_to_string(path).map_err(|e| io("read credential", path, e))?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|e| io("read credential", path, e))?;
     Ok(Secret::new(text.trim_end().to_owned()))
 }
 

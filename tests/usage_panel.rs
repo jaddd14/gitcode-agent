@@ -53,7 +53,7 @@ fn dates_are_utc_and_cross_leap_day_and_year_boundaries() {
         (19782, "2024-02-29"),
         (19723, "2024-01-01"),
     ] {
-        let text = render(&[], "fixture", day * DAY, 4, false, 60).join("\n");
+        let text = render(&[entry(day, None)], "fixture", day * DAY, 4, false, 60).join("\n");
         assert!(text.contains(expected), "missing {expected}: {text}");
         assert!(!text.contains("д1"));
     }
@@ -88,7 +88,7 @@ fn all_periods_and_empty_states_fit_small_viewports_with_pinned_footer() {
                     assert!(visible.len() <= height);
                     if height >= 2 && rows.len() > height {
                         assert_eq!(visible.first(), rows.first());
-                        assert_eq!(visible.last(), rows.get(rows.len() - 2));
+                        assert_eq!(visible.last(), rows.last());
                         assert!(visible
                             .last()
                             .is_some_and(|row| row.contains("esc закрыть")));

@@ -10,7 +10,7 @@ mod perm {
 }
 
 use perm::{Engine, Mode, Rule};
-use shell::{Session, MAX_TIMEOUT, OUTPUT_LIMIT};
+use shell::{Session, OUTPUT_LIMIT};
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -73,6 +73,29 @@ fn splitter_is_conservative_and_quote_aware() {
         shell::split_commands("printf a\\;b;").unwrap(),
         ["printf a\\;b"]
     );
+    assert_eq!(
+        shell::split_commands(
+            "ls -la /root 2>/dev/null | head -50; echo \"---\"; find / -maxdepth 4 -iname \"*dotdotagent*\" -not -path \"*/proc/*\" 2>/dev/null | head -50"
+        )
+        .unwrap(),
+        [
+            "ls -la /root 2>/dev/null",
+            "head -50",
+            "echo \"---\"",
+            "find / -maxdepth 4 -iname \"*dotdotagent*\" -not -path \"*/proc/*\" 2>/dev/null",
+            "head -50"
+        ]
+    );
+    assert_eq!(
+        shell::split_commands("ls /root 2>/dev/null | head -5; find / -maxdepth 2 2>&1 | head")
+            .unwrap(),
+        [
+            "ls /root 2>/dev/null",
+            "head -5",
+            "find / -maxdepth 2 2>&1",
+            "head"
+        ]
+    );
     for command in [
         "",
         " ",
@@ -88,6 +111,8 @@ fn splitter_is_conservative_and_quote_aware() {
         "echo \"$HOME\"",
         "A=x pwd",
         "echo hi > file",
+        "echo hi 2>/dev/null/file",
+        "echo hi 2>&1 > file",
         "cat <<EOF",
         "cat <<<x",
         "echo *",
@@ -167,6 +192,49 @@ async fn permissions_fail_closed_before_any_side_effect() {
 }
 
 #[tokio::test]
+async fn ordinary_bash_syntax_works_and_complex_rules_fail_closed() {
+    let mut f = Fixture::new(Mode::Bypass);
+    let result = f.run("name=world\nprintf '%s\\n' \"hello $(printf '%s' \"$name\")\" > result\ncat <<'EOF' >> result\nquoted 'text' and \"text\"\nEOF\ncat result").await;
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.output, "hello world\nquoted 'text' and \"text\"\n");
+    let result = f.run("for f in result; do cat \"$f\"; done").await;
+    assert_eq!(result.exit_code, Some(0));
+    assert!(result.output.contains("hello world"));
+    f.engine
+        .deny
+        .push(Rule::parse("Bash(touch blocked)").unwrap());
+    assert!(f
+        .session
+        .execute(&f.engine, "echo $(touch blocked)", LIMIT)
+        .await
+        .is_err());
+    assert!(!f.root.join("blocked").exists());
+    f.engine.deny.clear();
+    f.engine.mode = Mode::Default;
+    assert!(f
+        .session
+        .execute(&f.engine, "echo $(printf test)", LIMIT)
+        .await
+        .unwrap_err()
+        .contains("approval"));
+    f.session.close().await;
+}
+
+#[tokio::test]
+async fn subprocess_output_cannot_forge_completion_and_path_is_inherited() {
+    let f = Fixture::new(Mode::Bypass);
+    let result = f
+        .run("printf '\\036M71:0\\037'; sleep 0.1; printf finished; false")
+        .await;
+    assert_eq!(result.exit_code, Some(1));
+    assert!(result.output.contains("finished"));
+    assert!(result.output.contains("M71:0"));
+    let result = f.run("printf '%s' \"$PATH\"").await;
+    assert_eq!(result.output, std::env::var("PATH").unwrap_or_default());
+    f.session.close().await;
+}
+
+#[tokio::test]
 async fn persistent_cwd_env_status_and_noninteractive_stdin() {
     let f = Fixture::new(Mode::Bypass);
     assert_eq!(
@@ -219,13 +287,27 @@ async fn bounded_output_drains_and_session_survives() {
 #[tokio::test]
 async fn timeout_resets_session_and_validates_bounds() {
     let f = Fixture::new(Mode::Bypass);
-    for timeout in [Duration::ZERO, MAX_TIMEOUT + Duration::from_nanos(1)] {
-        assert!(f
-            .session
-            .execute(&f.engine, "touch invalid", timeout)
+    assert!(f
+        .session
+        .execute(&f.engine, "touch invalid", Duration::ZERO)
+        .await
+        .is_err());
+    assert_eq!(
+        f.session
+            .execute(&f.engine, "printf long", Duration::from_secs(601))
             .await
-            .is_err());
-    }
+            .unwrap()
+            .output,
+        "long"
+    );
+    assert_eq!(
+        f.session
+            .execute(&f.engine, "printf no-deadline", Duration::MAX)
+            .await
+            .unwrap()
+            .output,
+        "no-deadline"
+    );
     assert!(!f.root.join("invalid").exists());
     f.run("cd sub; export M7_RESET=yes").await;
     let output = f

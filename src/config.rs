@@ -58,6 +58,9 @@ pub struct Config {
     pub model: String,
     /// Provider endpoint configuration.
     pub provider: Provider,
+    /// Allow a project to override provider credentials and interpolate environment variables.
+    /// This opt-in is accepted only in the user's configuration.
+    pub trust_project_config: bool,
     /// Hard agent iteration limit.
     pub max_turns: u32,
     /// Automatic compaction threshold as a window fraction.
@@ -74,6 +77,7 @@ impl Default for Config {
             language: "ru".into(),
             model: "claude-opus-5-5".into(),
             provider: Provider::default(),
+            trust_project_config: false,
             max_turns: 50,
             compaction_threshold: 0.9,
             intro: true,
@@ -138,16 +142,58 @@ pub fn load(
 ) -> Result<Config> {
     let mut value = toml::Value::try_from(Config::default())
         .map_err(|_| invalid(Path::new("defaults"), "root", "cannot encode defaults"))?;
-    for path in [
-        home.join(".gitcode/config.toml"),
-        project.join(".gitcode/config.toml"),
-        project.join(".gitcode/config.local.toml"),
+    let user_path = home.join(".gitcode/config.toml");
+    for (path, project_layer) in [
+        (user_path.clone(), false),
+        (project.join(".gitcode/config.toml"), true),
+        (project.join(".gitcode/config.local.toml"), true),
     ] {
+        // When HOME is the workspace, this is the same trusted user file.
+        if project_layer && path == user_path {
+            continue;
+        }
         match std::fs::read_to_string(&path) {
             Ok(text) => {
-                let layer: toml::Value = text
+                let mut layer: toml::Value = text
                     .parse()
                     .map_err(|_| invalid(&path, "root", "invalid TOML syntax"))?;
+                let trusted = value
+                    .get("trust_project_config")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false);
+                if project_layer {
+                    if layer.get("trust_project_config").is_some() {
+                        return Err(invalid(
+                            &path,
+                            "trust_project_config",
+                            "only the user configuration can grant project trust",
+                        ));
+                    }
+                    if !trusted {
+                        if has_environment_expansion(&layer) {
+                            return Err(invalid(
+                                &path,
+                                "root",
+                                "environment interpolation requires trusted project configuration",
+                            ));
+                        }
+                        if let Some(provider) =
+                            layer.get("provider").and_then(toml::Value::as_table)
+                        {
+                            for key in ["base_url", "api_key_env"] {
+                                if provider.get(key).is_some_and(|candidate| {
+                                    value.get("provider").and_then(|v| v.get(key))
+                                        != Some(candidate)
+                                }) {
+                                    return Err(invalid(&path, "provider", "project cannot change the provider endpoint or credential without explicit user trust"));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Resolve trusted user settings before comparing project overrides.
+                    interpolate(&mut layer, env)?;
+                }
                 merge(&mut value, layer);
                 let _: Config = value
                     .clone()
@@ -182,6 +228,15 @@ pub fn load(
     })?;
     config.validate(Path::new("resolved configuration"))?;
     Ok(config)
+}
+
+fn has_environment_expansion(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::String(text) => text.contains("${"),
+        toml::Value::Array(items) => items.iter().any(has_environment_expansion),
+        toml::Value::Table(items) => items.values().any(has_environment_expansion),
+        _ => false,
+    }
 }
 
 fn merge(target: &mut toml::Value, source: toml::Value) {

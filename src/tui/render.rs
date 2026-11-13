@@ -22,7 +22,19 @@ struct InlinePanel {
     height: usize,
 }
 
-fn elapsed_duration(mut seconds: u64) -> String {
+// A gentle fill-and-empty cycle gives the running state intermediate frames.
+fn subagent_spinner(elapsed_ms: u64, ascii: bool) -> &'static str {
+    const CIRCLE: [&str; 8] = ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"];
+    const ASCII: [&str; 8] = ["o", "o", "O", "O", "@", "O", "O", "o"];
+    let frame = ((elapsed_ms / 350) % CIRCLE.len() as u64) as usize;
+    if ascii {
+        ASCII[frame]
+    } else {
+        CIRCLE[frame]
+    }
+}
+
+pub(super) fn elapsed_duration(mut seconds: u64) -> String {
     const UNITS: [(u64, &str); 5] = [
         (365 * 24 * 60 * 60, "г"),
         (7 * 24 * 60 * 60, "нед"),
@@ -65,7 +77,11 @@ impl Frame {
         let view = editor.view(width.saturating_sub(4).max(1));
         let activity_rows = usize::from(status.busy)
             + usize::from(status.retry_notice.is_some())
-            + usize::from(status.busy || status.retry_notice.is_some());
+            + usize::from(status.busy && status.retry_notice.is_some())
+            + usize::from(status.copied_chars.is_some())
+            + usize::from(
+                status.busy || status.retry_notice.is_some() || status.copied_chars.is_some(),
+            );
         let agent_rows = status
             .subagents
             .len()
@@ -122,6 +138,9 @@ impl Frame {
                 "▲ "
             };
             above.push(clip(&format!("{prefix}{notice}"), width));
+            if status.busy {
+                above.push(String::new());
+            }
         }
         if status.busy {
             let verb = "Думаю";
@@ -130,8 +149,27 @@ impl Frame {
                 &format!(
                     " {mark} {verb}… ({} · ↓ {}{} токенов)",
                     elapsed_duration(status.elapsed_secs),
-                    if status.output_estimated { "~" } else { "" },
+                    if status.output_estimated && status.turn_output > 0 {
+                        "~"
+                    } else {
+                        ""
+                    },
                     super::statusbar::compact(status.turn_output)
+                ),
+                width,
+            ));
+        }
+        if let Some(count) = status.copied_chars {
+            let word = match (count % 100, count % 10) {
+                (11..=14, _) => "символов",
+                (_, 1) => "символ",
+                (_, 2..=4) => "символа",
+                _ => "символов",
+            };
+            above.push(clip(
+                &format!(
+                    "  {} Скопировано · {count} {word}",
+                    if glyphs.ascii { "+" } else { "✓" }
                 ),
                 width,
             ));
@@ -158,7 +196,7 @@ impl Frame {
         for run in status.subagents.iter().rev().take(agent_rows).rev() {
             let (mark, state) = match run.state {
                 crate::agent::agency::SubagentRunState::Running => (
-                    if glyphs.ascii { "*" } else { "●" },
+                    subagent_spinner(status.elapsed_millis, glyphs.ascii),
                     run.current_tool.as_deref().unwrap_or("Думает"),
                 ),
                 crate::agent::agency::SubagentRunState::Completed => {
@@ -261,11 +299,11 @@ impl<W: Write> Renderer<W> {
         }
     }
     /// Copy a settled selection to terminals supporting OSC 52.
-    pub fn copy_selection_if_due(&mut self) -> io::Result<()> {
+    pub fn copy_selection_if_due(&mut self) -> io::Result<Option<usize>> {
         if let Some(viewport) = &mut self.viewport {
-            viewport.copy_if_due(&mut self.writer)?;
+            return viewport.copy_if_due(&mut self.writer);
         }
-        Ok(())
+        Ok(None)
     }
     /// Update geometry; the next event-driven paint reflows its frame.
     pub fn resize(&mut self, width: usize, height: usize) {
@@ -282,6 +320,10 @@ impl<W: Write> Renderer<W> {
     /// Current terminal width and height.
     pub fn size(&self) -> (usize, usize) {
         self.size
+    }
+    /// Color capability selected for this renderer.
+    pub fn color_mode(&self) -> ColorMode {
+        self.mode
     }
     fn clear_live(&mut self) -> io::Result<()> {
         self.live_bottom = false;
@@ -941,5 +983,69 @@ mod elapsed_tests {
             assert_eq!(elapsed_duration(seconds), expected, "{seconds}");
         }
         assert!(!elapsed_duration(u64::MAX).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod subagent_spinner_tests {
+    use super::*;
+    use crate::theme::{self, ColorMode, Theme};
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn circle_fills_and_empties_at_a_steady_pace_and_keeps_its_color() {
+        let expected = ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔", "○"];
+        let theme = Theme::default();
+        let rose = theme::foreground(theme.rose, ColorMode::TrueColor);
+        for (step, glyph) in expected.iter().enumerate() {
+            let ms = step as u64 * 350;
+            assert_eq!(subagent_spinner(ms, false), *glyph);
+            assert_eq!(subagent_spinner(ms + 349, false), *glyph);
+            assert_eq!(glyph.width(), 1);
+            let row = format!("  {glyph} explore · task · Думает · 0 ток");
+            let styled =
+                super::super::widgets::style_live_row(&row, &theme, ColorMode::TrueColor, ms);
+            assert!(styled.starts_with(&format!("  {rose}{glyph}")));
+        }
+        for frame in 0..8 {
+            assert!(subagent_spinner(frame * 350, true).is_ascii());
+        }
+    }
+}
+
+#[cfg(test)]
+mod clipboard_notice_tests {
+    use super::*;
+    use crate::tui::input::Editor;
+    #[test]
+    fn copy_notice_is_above_composer_during_idle_and_generation() {
+        for busy in [false, true] {
+            let status = Status {
+                busy,
+                copied_chars: Some(23),
+                ..Status::default()
+            };
+            let frame = Frame::input(&Editor::default(), &status, 80, 24);
+            let notice = frame
+                .lines
+                .iter()
+                .position(|line| line.contains("Скопировано · 23 символа"))
+                .unwrap();
+            let prompt = frame
+                .lines
+                .iter()
+                .position(|line| line.contains("Спроси, или / для команд"))
+                .unwrap();
+            assert!(notice < prompt);
+            let styled = super::super::widgets::style_frame_row(
+                &frame.lines[notice],
+                &Theme::default(),
+                ColorMode::TrueColor,
+            );
+            assert!(styled.contains(&crate::theme::foreground(
+                Theme::default().rose,
+                ColorMode::TrueColor
+            )));
+        }
     }
 }

@@ -27,7 +27,7 @@ async fn read_search_and_deny_rules() {
         )
         .await
         .unwrap_err()
-        .contains("requires approval"));
+        .contains("approval"));
     std::fs::create_dir_all(root.join(".gitcode/skills/fixture")).unwrap();
     std::fs::write(
         root.join(".gitcode/skills/fixture/SKILL.md"),
@@ -108,5 +108,41 @@ async fn edits_are_guarded_and_connected_to_native_executor() {
         std::fs::read_to_string(root.join("file.txt")).unwrap(),
         "external\n"
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn read_does_not_silently_cut_long_source_lines() {
+    let root = std::env::temp_dir().join(format!("gitcode-tools-long-line-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("long.txt"),
+        format!("{}END-OF-LINE\n", "x".repeat(4000)),
+    )
+    .unwrap();
+    let mut tools = Tools::new(Engine::new(&root, Mode::Default).unwrap());
+    let output = tools
+        .execute("Read", &json!({"path":"long.txt"}))
+        .await
+        .unwrap();
+    assert!(output.contains("END-OF-LINE"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn approved_edit_never_overrides_explicit_deny_or_plan_mode() {
+    use gitcode::perm::Rule;
+    let root = std::env::temp_dir().join(format!("gitcode-edit-deny-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut engine = Engine::new(&root, Mode::Default).unwrap();
+    engine.deny.push(Rule::parse("Write(blocked.txt)").unwrap());
+    let mut tools = Tools::new(engine);
+    let input = json!({"path":"blocked.txt","content":"bad"});
+    assert!(tools.execute_approved_tool("Write", &input).await.is_err());
+    assert!(!root.join("blocked.txt").exists());
+    tools.permissions.deny.clear();
+    tools.permissions.mode = Mode::Plan;
+    assert!(tools.execute_approved_tool("Write", &input).await.is_err());
+    assert!(!root.join("blocked.txt").exists());
     std::fs::remove_dir_all(root).unwrap();
 }

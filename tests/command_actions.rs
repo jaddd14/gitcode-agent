@@ -92,6 +92,12 @@ async fn command_actions_are_honest_permission_checked_and_isolated() {
     assert!(copy.contains("Копирование не выполнено"));
     assert!(status.toast.is_none());
 
+    status.model = agent.model.clone();
+    run("/effort xhigh", &mut agent, &mut messages, &mut status).await;
+    assert_eq!(status.effort.as_deref(), Some("xhigh"));
+    assert!(status.line(160).contains("offline-test xhigh"));
+    assert!(status.toast.is_none());
+
     for mode in [Mode::Default, Mode::Plan] {
         agent.tools.permissions.mode = mode;
         let init = run("/init", &mut agent, &mut messages, &mut status).await;

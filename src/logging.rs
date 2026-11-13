@@ -34,7 +34,9 @@ impl Logger {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         match std::fs::symlink_metadata(path) {
             Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
@@ -50,11 +52,24 @@ impl Logger {
             _ => {}
         }
         let file = options.open(path).map_err(|e| io("open log", path, e))?;
+        let metadata = file.metadata().map_err(|e| io("inspect log", path, e))?;
+        if !metadata.is_file() {
+            return Err(io(
+                "open log",
+                path,
+                std::io::Error::other("requires a regular file"),
+            ));
+        }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| io("protect log", path, e))?;
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            if metadata.nlink() != 1 || metadata.permissions().mode() & 0o077 != 0 {
+                return Err(io(
+                    "open log",
+                    path,
+                    std::io::Error::other("requires a private file with one link"),
+                ));
+            }
         }
         Ok(Self {
             file,

@@ -7,6 +7,8 @@ use super::clip;
 pub struct Status {
     /// Current model display name.
     pub model: String,
+    /// Explicit reasoning effort, or none for the provider default.
+    pub effort: Option<String>,
     /// Current permission mode display name.
     pub permission: String,
     /// Cached git branch name.
@@ -41,6 +43,12 @@ pub struct Status {
     pub retry_notice: Option<String>,
     /// Transient toast notification message.
     pub toast: Option<String>,
+    /// Number of characters in the recently copied selection, while its notice is visible.
+    pub copied_chars: Option<usize>,
+    /// Whether entering BYPASS is awaiting explicit confirmation.
+    pub bypass_confirmation: bool,
+    /// Whether the confirmation menu currently points to the affirmative choice.
+    pub bypass_selected_yes: bool,
     /// Number of queued user prompts waiting behind the active turn.
     pub queued: usize,
     /// Submitted prompts awaiting application to the model conversation.
@@ -95,7 +103,13 @@ impl Status {
             if self.dirty { "*" } else { "" }
         );
         let parts = [
-            format!("✿ {}", self.model),
+            format!(
+                "✿ {}{}",
+                self.model,
+                self.effort
+                    .as_ref()
+                    .map_or_else(String::new, |value| format!(" {value}"))
+            ),
             format!(
                 "{}↑ {}{}↓",
                 compact(self.input),

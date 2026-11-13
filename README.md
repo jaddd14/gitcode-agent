@@ -25,8 +25,8 @@ A local-first terminal coding agent under development in a single Rust Cargo pac
 | Agent | Model -> validated tools -> tool results -> model loop | Parallel tool scheduling and cancellation-consistent persistence remain incomplete |
 | Workspace tools | Read, LS, Glob, Grep, Write, Edit, MultiEdit, NotebookEdit, apply_patch | Text-oriented reads; no complete image/PDF tool path |
 | Editing | Read-before-write tracking and per-file atomic replacement | Multi-file changes are not crash-atomic; checkpoints/diffs are not integrated automatically |
-| Shell | Persistent non-interactive sessions and background-job helpers | No OS-level sandbox; restrictive parser rejects unsupported syntax |
-| Terminal | Framed Sakura header and prompt, immediate slash popup, tabbed usage, model picker, live retry/tool progress, Unicode editor and streaming Markdown | Advanced completion, persistent history and permission approval remain incomplete |
+| Shell | Persistent non-interactive sessions and background-job helpers | No OS-level sandbox; complex syntax is checked as a whole |
+| Terminal | Borderless startup mark and build highlights, framed prompt, immediate slash popup, tabbed usage, model picker, live retry/tool progress, Unicode editor and streaming Markdown | Advanced completion, persistent history and permission approval remain incomplete |
 | Headless | `-p`, `exec`, bounded stdin, text/JSON and live stream-JSON output, doctor and completions | Stream input accepts text/message.content strings; full flags/tool-event parity remains incomplete |
 | Sessions and usage | Completed CLI/TUI turns persist, `--resume`/`--continue`, project memory, per-request usage ledger | Failed/interrupted turns are not committed; prices remain unknown and USD budgets fail closed |
 | Other modules | Checkpoints, agency, commands, hooks, skills, MCP and web helpers | Module presence does not mean these are available in the interactive application |
@@ -49,6 +49,8 @@ cargo build --release
 ```
 
 A configured reachable provider is needed for model requests; startup itself does not request model output.
+
+On Unix, interactive GitCode uses `tmux` when available so work continues after a terminal or SSH disconnect. Reconnect from the same project directory with `gitcode --continue`. If already running inside tmux, GitCode uses that session. Use Ctrl+C to interrupt a turn and exit GitCode normally to stop the session. Without tmux, GitCode warns and runs attached to the terminal; a reboot or killed tmux server also stops the process.
 
 ```bash
 export ANTHROPIC_API_KEY="<your-key>"
@@ -73,11 +75,12 @@ The `src/provider/registry.rs` preset list and quirk transformer are library com
 
 ## Safety and limitations
 
-- Permission modes and deny/ask/allow rules are implemented in the library. The interactive approval flow is not complete: operations requiring approval fail closed.
+- Interactive Bash requests can be approved once, rejected, or approved for single commands sharing the displayed executable and first argument until the conversation changes. Explicit ask rules still prompt and deny rules still apply. Other operations requiring approval and noninteractive requests fail closed.
 - `--dangerously-skip-permissions` enables bypass behavior; explicit denial rules and parser restrictions still apply. This flag is not filesystem isolation.
 - Native file tools check workspace boundaries. Arbitrary shell commands are **not confined by an OS sandbox**.
 - File and web content must be treated as untrusted input. This does not eliminate prompt-injection risk.
-- Shell substitutions, redirections and other unsupported syntax may be rejected rather than evaluated.
+- Bash supports substitutions, redirects, multiline scripts and other shell syntax. Complex commands are approved as a whole; when scoped Bash deny rules are configured, complex syntax fails closed because its component commands cannot be reliably inferred.
+- Bash commands have no default deadline; an optional `timeout_seconds` explicitly sets one. Output remains bounded.
 - Cancellation, secret handling and concurrent-file race protection require continued hardening; see [SECURITY.md](SECURITY.md).
 
 ## Configuration

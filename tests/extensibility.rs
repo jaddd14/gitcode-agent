@@ -49,13 +49,14 @@ impl Drop for TempWorkspace {
 }
 
 #[test]
-fn builtin_registry_has_all_33_required_commands() {
+fn builtin_registry_has_all_required_commands() {
     let expected = [
         "help",
         "clear",
         "compact",
         "config",
         "model",
+        "effort",
         "provider",
         "usage",
         "cost",
@@ -86,7 +87,7 @@ fn builtin_registry_has_all_33_required_commands() {
         "exit",
     ];
 
-    assert_eq!(BUILTIN_COMMANDS.len(), 33);
+    assert_eq!(BUILTIN_COMMANDS.len(), 34);
     let actual: HashSet<&str> = BUILTIN_COMMANDS.iter().map(|c| c.name).collect();
     for cmd in expected {
         assert!(actual.contains(cmd), "missing built-in command: /{cmd}");
@@ -103,7 +104,7 @@ fn builtin_registry_has_all_33_required_commands() {
 #[test]
 fn slash_completion_supports_prefix_and_fuzzy_matching() {
     let all = complete_slash("");
-    assert_eq!(all.len(), 33);
+    assert_eq!(all.len(), 34);
 
     let co_matches = complete_slash("/co");
     let names: Vec<&str> = co_matches.iter().map(|c| c.name.as_str()).collect();

@@ -131,6 +131,12 @@ pub fn html_to_markdown(html: &str) -> String {
 /// Wrap web-originated content in explicit untrusted-data markers to defend against prompt injection.
 pub fn wrap_untrusted_web(source_url: &str, body: &str) -> String {
     let safe_body = body.replace("</untrusted_web_content>", "[escaped-closing-tag]");
+    let source_url = source_url
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace(['\r', '\n'], " ");
     format!(
         "<untrusted_web_content source=\"{source_url}\">\n{safe_body}\n</untrusted_web_content>"
     )
@@ -251,18 +257,12 @@ impl WebSearchBackend {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| "cannot build WebSearch client")?;
-        let sep = if self.endpoint.contains('?') {
-            '&'
-        } else {
-            '?'
-        };
-        let url = format!(
-            "{}{}q={}&format=json",
-            self.endpoint,
-            sep,
-            query.replace(' ', "+")
-        );
-        let mut req = client.get(&url);
+        let mut url =
+            reqwest::Url::parse(&self.endpoint).map_err(|_| "invalid WebSearch endpoint")?;
+        url.query_pairs_mut()
+            .append_pair("q", query)
+            .append_pair("format", "json");
+        let mut req = client.get(url);
         if let Some((k, v)) = &self.auth_header {
             req = req.header(k, v);
         }
@@ -270,10 +270,25 @@ impl WebSearchBackend {
         if !resp.status().is_success() {
             return Err(format!("WebSearch HTTP {}", resp.status().as_u16()));
         }
-        let val: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|_| "invalid WebSearch JSON payload")?;
+        const MAX_SEARCH_BYTES: usize = 2 * 1024 * 1024;
+        if resp
+            .content_length()
+            .is_some_and(|size| size > MAX_SEARCH_BYTES as u64)
+        {
+            return Err("WebSearch response is too large".into());
+        }
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| "cannot read WebSearch response")?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_SEARCH_BYTES {
+                return Err("WebSearch response is too large".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let val: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| "invalid WebSearch JSON payload")?;
         let items = val["results"]
             .as_array()
             .or_else(|| val["web"]["results"].as_array())

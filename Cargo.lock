@@ -419,14 +419,16 @@ dependencies = [
 
 [[package]]
 name = "gitcode"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
  "clap",
  "crossterm",
  "futures-util",
+ "getrandom 0.4.3",
  "globset",
  "ignore",
+ "libc",
  "regex",
  "reqwest",
  "serde",

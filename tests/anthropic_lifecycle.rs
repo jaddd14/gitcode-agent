@@ -100,3 +100,76 @@ fn rejects_unopened_deltas_wrong_types_and_premature_end() {
     stream.finish().unwrap();
     assert!(accept(&mut stream, json!({"type":"message_stop"})).is_err());
 }
+
+#[test]
+fn one_block_with_several_complete_argument_objects_yields_every_call() {
+    let mut stream = Stream::default();
+    accept(&mut stream, json!({"type":"message_start","message":{}})).unwrap();
+    accept(
+        &mut stream,
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-1","name":"Bash","input":{}}}),
+    )
+    .unwrap();
+    for fragment in [
+        "{\"command\":\"which gitcode\"}",
+        "{\"command\":\"find /root -maxdepth 3 -name Cargo.toml\"}",
+    ] {
+        accept(
+            &mut stream,
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":fragment}}),
+        )
+        .unwrap();
+    }
+    let events = stream
+        .accept(Record {
+            event: String::new(),
+            data: json!({"type":"content_block_stop","index":0}).to_string(),
+        })
+        .unwrap();
+    let calls: Vec<_> = events
+        .into_iter()
+        .filter_map(|event| match event {
+            gitcode::provider::canonical::Event::ToolCall { id, input, .. } => Some((id, input)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, "call-1-1");
+    assert_eq!(calls[1].0, "call-1-2");
+    assert_eq!(calls[0].1["command"], "which gitcode");
+    assert_eq!(
+        calls[1].1["command"],
+        "find /root -maxdepth 3 -name Cargo.toml"
+    );
+}
+
+#[test]
+fn a_single_streamed_fragment_keeps_the_original_call_id() {
+    let mut stream = Stream::default();
+    accept(&mut stream, json!({"type":"message_start","message":{}})).unwrap();
+    accept(
+        &mut stream,
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-1","name":"Bash","input":{}}}),
+    )
+    .unwrap();
+    for fragment in ["{\"comm", "and\":\"pwd\"}"] {
+        accept(
+            &mut stream,
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":fragment}}),
+        )
+        .unwrap();
+    }
+    let events = stream
+        .accept(Record {
+            event: String::new(),
+            data: json!({"type":"content_block_stop","index":0}).to_string(),
+        })
+        .unwrap();
+    let gitcode::provider::canonical::Event::ToolCall { id, input, .. } =
+        events.into_iter().next().unwrap()
+    else {
+        panic!("missing tool call")
+    };
+    assert_eq!(id, "call-1");
+    assert_eq!(input["command"], "pwd");
+}

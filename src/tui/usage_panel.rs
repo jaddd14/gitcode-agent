@@ -1,6 +1,6 @@
 //! Ledger-backed usage periods with deterministic UTC day boundaries.
 
-use super::widgets::{card, tabs, vertical_bar_chart, wrap_text, Glyphs, Table};
+use super::widgets::{tabs, vertical_bar_chart, wrap_text, Glyphs, Table};
 use crate::usage::{UsageEntry, UsageSummary};
 use std::collections::BTreeMap;
 
@@ -33,8 +33,10 @@ pub fn render(
         .cloned()
         .collect::<Vec<_>>();
     let summary = UsageSummary::from_entries(&filtered);
-    let inner = width.saturating_sub(4);
-    let mut body = wrap_text(&tabs(&PERIODS, period, usize::MAX), inner);
+    let inner = width.saturating_sub(2);
+    let mut body = vec![String::new()];
+    body.extend(wrap_text(&tabs(&PERIODS, period, usize::MAX), inner));
+    body.push(String::new());
     if filtered.is_empty() {
         for line in [
             "В этом периоде пока нет запросов.",
@@ -77,6 +79,9 @@ pub fn render(
             inner,
         ));
     }
+    if filtered.is_empty() {
+        return finish(body, width);
+    }
     for (title, by_agent) in [("По моделям", false), ("По агентам", true)] {
         let mut groups = BTreeMap::<String, Vec<UsageEntry>>::new();
         for entry in &filtered {
@@ -102,6 +107,7 @@ pub fn render(
                 ]
             })
             .collect::<Vec<_>>();
+        body.push(String::new());
         body.push(title.into());
         body.extend(
             Table {
@@ -112,6 +118,7 @@ pub fn render(
             .render(inner),
         );
     }
+    body.push(String::new());
     body.push(
         if cost_chart {
             "За 14 дней · стоимость, USD"
@@ -157,11 +164,21 @@ pub fn render(
         "Лимиты: Провайдер не передал заголовки лимитов.",
         inner,
     ));
-    body.extend(wrap_text(
-        "tab / ←→ период · t токены/стоимость · ↑↓ / PgUp/PgDn прокрутка",
-        inner,
+    finish(body, width)
+}
+
+fn finish(body: Vec<String>, width: usize) -> Vec<String> {
+    let mut rows = vec![super::clip("  Использование", width)];
+    rows.extend(
+        body.into_iter()
+            .map(|row| super::clip(&format!("  {row}"), width)),
+    );
+    rows.push(String::new());
+    rows.push(super::clip(
+        "  esc закрыть   ↑↓ прокрутка   ←→ период   t график",
+        width,
     ));
-    card("Использование", &body, "esc закрыть", width)
+    rows
 }
 
 fn cost_label(summary: &UsageSummary) -> String {
@@ -195,8 +212,7 @@ fn utc_date(days: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// Fit a card to a terminal height, pinning its title and footer while scrolling its body.
-/// The optional trailing blank from `card` is discarded when scrolling is necessary.
+/// Fit the panel to a terminal height, pinning its title and footer while scrolling its body.
 /// `scroll` is a body-row offset, clamped after resizes; heights zero through two are safe.
 pub fn viewport(rows: &[String], height: usize, scroll: &mut usize) -> Vec<String> {
     if rows.len() <= height {
@@ -207,13 +223,7 @@ pub fn viewport(rows: &[String], height: usize, scroll: &mut usize) -> Vec<Strin
         *scroll = 0;
         return vec![];
     }
-    let footer = rows
-        .len()
-        .saturating_sub(if rows.last().is_some_and(String::is_empty) {
-            2
-        } else {
-            1
-        });
+    let footer = rows.len().saturating_sub(1);
     if height == 1 || footer == 0 {
         *scroll = 0;
         return vec![rows[0].clone()];

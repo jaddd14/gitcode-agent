@@ -65,3 +65,24 @@ fn every_builtin_is_reachable_in_the_same_popup() {
         );
     }
 }
+
+#[test]
+fn ordinary_paste_and_arguments_do_not_open_the_command_menu() {
+    let mut editor = Editor::default();
+    editor.set_text(" new (вот тут был слеш new но пришлось убрать) · новый диалог\n│  /clear · очистить диалог");
+    assert!(!editor.completion_open());
+    let frame = Frame::input(&editor, &Status::default(), 80, 36);
+    assert!(!frame.lines.iter().any(|line| line.contains("Команды")));
+
+    editor.set_text("/usage extra");
+    assert!(!editor.completion_open());
+    editor.set_text("/usage\nmore");
+    assert!(!editor.completion_open());
+    editor.set_text("/not-a-command");
+    assert!(!editor.completion_open());
+
+    editor.set_text("/usa");
+    assert!(editor.completion_open());
+    editor.set_text("/usage ");
+    assert!(editor.completion_open());
+}

@@ -20,18 +20,40 @@ pub(super) struct Viewport {
     drawn: Vec<String>,
     drawn_cursor: Option<(usize, usize)>,
     selection: Option<Selection>,
+    // Geometry of the last painted frame, used to translate mouse rows into
+    // conversation rows so a selection survives scrolling.
+    view_begin: usize,
+    view_chat_height: usize,
+    view_width: usize,
 }
+/// Mouse selection anchored to conversation content, not to screen rows.
+///
+/// The anchor is where the button went down; the cursor follows the pointer, so
+/// scrolling while the button is held extends the selection instead of dropping it.
 struct Selection {
-    start: (usize, usize),
-    end: (usize, usize),
+    anchor: (usize, usize),
+    cursor: (usize, usize),
+    // Last pointer position on screen, kept separately: the content row drifts
+    // as the view scrolls, and only the screen row can tell whether the pointer
+    // is resting on an edge.
+    pointer: (usize, usize),
     changed: Instant,
     copied: bool,
     dragging: bool,
     text: String,
+    start: (usize, usize),
+    end: (usize, usize),
 }
 impl Viewport {
     pub fn append(&mut self, rows: &[String]) {
-        self.history.extend_from_slice(rows);
+        // One empty row separates turns; models emit runs of newlines around
+        // tool calls, and repeating them stretches the transcript.
+        for row in rows {
+            if row.is_empty() && self.history.last().is_some_and(String::is_empty) {
+                continue;
+            }
+            self.history.push(row.clone());
+        }
     }
     pub fn clear(&mut self) {
         *self = Self::default();
@@ -40,61 +62,114 @@ impl Viewport {
         self.frame = Some(frame.clone());
         self.prefix = prefix.min(frame.lines.len());
     }
+    fn content_point(&self, screen: (usize, usize)) -> (usize, usize) {
+        let row = screen
+            .0
+            .min(self.view_chat_height.saturating_sub(1))
+            .saturating_add(self.view_begin);
+        (row, screen.1)
+    }
+    /// Resolve the content-anchored selection into ordered rows and plain text.
+    fn resolve_selection(&mut self, width: usize) {
+        let (history, frame_lines) = (&self.history, self.frame.as_ref());
+        let Some(s) = &mut self.selection else {
+            return;
+        };
+        let (a, b) = if s.anchor <= s.cursor {
+            (s.anchor, s.cursor)
+        } else {
+            (s.cursor, s.anchor)
+        };
+        s.start = a;
+        s.end = b;
+        let empty: &[String] = &[];
+        s.text = selected_rows(
+            history,
+            frame_lines.map_or(empty, |f| f.lines.as_slice()),
+            a,
+            b,
+            width,
+        );
+    }
+    /// Extend a held selection by the rows the content moved under a fixed pointer.
+    ///
+    /// Wheel events arrive instead of drag events while the button stays down, so
+    /// without this the endpoint would stay pinned to the old content row and the
+    /// copy would stop at the first scroll. The shift is measured from the painted
+    /// view, so clamping at the end of the conversation cannot over-extend it.
+    fn follow_scroll(&mut self, rows: isize) {
+        let Some(s) = &mut self.selection else {
+            return;
+        };
+        if !s.dragging {
+            return;
+        }
+        s.cursor.0 = if rows < 0 {
+            s.cursor.0.saturating_sub(rows.unsigned_abs())
+        } else {
+            s.cursor.0.saturating_add(rows as usize)
+        };
+        s.changed = Instant::now();
+        s.copied = false;
+    }
     pub fn mouse(&mut self, event: MouseEvent) {
-        let point = (event.row as usize, event.column as usize);
+        let screen = (event.row as usize, event.column as usize);
         match event.kind {
-            MouseEventKind::ScrollUp => {
-                self.offset = self.offset.saturating_add(6);
-                self.selection = None;
-            }
-            MouseEventKind::ScrollDown => {
-                self.offset = self.offset.saturating_sub(6);
-                self.selection = None;
-            }
+            MouseEventKind::ScrollUp => self.offset = self.offset.saturating_add(6),
+            MouseEventKind::ScrollDown => self.offset = self.offset.saturating_sub(6),
             MouseEventKind::Down(MouseButton::Left) => {
+                let point = self.content_point(screen);
                 self.selection = Some(Selection {
-                    start: point,
-                    end: point,
+                    anchor: point,
+                    cursor: point,
+                    pointer: screen,
                     changed: Instant::now(),
                     copied: false,
                     dragging: true,
                     text: String::new(),
+                    start: point,
+                    end: point,
                 })
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                let point = self.content_point(screen);
                 if let Some(s) = &mut self.selection {
-                    s.end = point;
+                    s.cursor = point;
+                    s.pointer = screen;
                     s.changed = Instant::now();
                     s.copied = false;
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                let point = self.content_point(screen);
                 if let Some(s) = &mut self.selection {
-                    if s.end != point {
-                        s.end = point;
-                        s.changed = Instant::now();
-                        s.copied = false;
-                    }
+                    s.cursor = point;
+                    s.pointer = screen;
+                    s.changed = Instant::now();
+                    s.copied = false;
                     s.dragging = false;
                 }
             }
             _ => {}
         }
-        if let Some(selection) = &mut self.selection {
-            if matches!(
-                event.kind,
-                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-            ) {
-                selection.text = selected_text(&self.screen, selection.start, selection.end);
-            }
+        if matches!(
+            event.kind,
+            MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+        ) {
+            let width = self.view_width;
+            self.resolve_selection(width);
         }
     }
-    pub fn copy_if_due(&mut self, writer: &mut impl Write) -> io::Result<()> {
+    pub fn copy_if_due(&mut self, writer: &mut impl Write) -> io::Result<Option<usize>> {
         let Some(s) = &mut self.selection else {
-            return Ok(());
+            return Ok(None);
         };
         if s.copied || s.start == s.end || s.changed.elapsed() < Duration::from_secs(1) {
-            return Ok(());
+            return Ok(None);
         }
         if !s.text.is_empty() {
             write!(
@@ -103,12 +178,15 @@ impl Viewport {
                 STANDARD.encode(s.text.as_bytes())
             )?;
             writer.flush()?;
+            s.copied = true;
+            return Ok(Some(s.text.graphemes(true).count()));
         }
         s.copied = true;
-        Ok(())
+        Ok(None)
     }
+    #[allow(clippy::too_many_lines)]
     pub fn draw(&mut self, writer: &mut impl Write, size: (usize, usize)) -> io::Result<()> {
-        let Some(frame) = &self.frame else {
+        let Some(frame) = self.frame.clone() else {
             return Ok(());
         };
         let (width, height) = size;
@@ -122,7 +200,20 @@ impl Viewport {
                 .saturating_add(count.saturating_sub(self.previous_count));
         }
         self.previous_count = count;
-        self.offset = self.offset.min(count.saturating_sub(chat_height));
+        let max_offset = count.saturating_sub(chat_height);
+        self.offset = self.offset.min(max_offset);
+        if let Some(s) = &self.selection {
+            if s.dragging {
+                // A held drag that reaches an edge scrolls, so the copy keeps
+                // following the pointer instead of stopping at the old view.
+                let edge = chat_height.saturating_sub(1);
+                if s.pointer.0 >= edge {
+                    self.offset = self.offset.saturating_sub(3).min(max_offset);
+                } else if s.pointer.0 == 0 {
+                    self.offset = self.offset.saturating_add(3).min(max_offset);
+                }
+            }
+        }
         let end = count.saturating_sub(self.offset);
         let begin = end.saturating_sub(chat_height);
         let mut rows = vec![String::new(); height];
@@ -145,28 +236,39 @@ impl Viewport {
             }
         }
         self.screen = rows.clone();
+        let shift = begin as isize - self.view_begin as isize;
+        self.view_begin = begin;
+        self.view_chat_height = chat_height;
+        self.view_width = width;
+        if shift != 0 {
+            self.follow_scroll(shift);
+        }
+        if self.selection.is_some() {
+            self.resolve_selection(width);
+        }
         if let Some(s) = &self.selection {
-            if s.start != s.end {
-                let (start, end) = if s.start <= s.end {
-                    (s.start, s.end)
-                } else {
-                    (s.end, s.start)
-                };
-                for row in start.0..=end.0.min(height.saturating_sub(1)) {
-                    let plain = super::plain(&rows[row]);
-                    let from = if row == start.0 { start.1 } else { 0 };
-                    let to = if row == end.0 {
-                        end.1.saturating_add(1)
-                    } else {
-                        width
-                    };
-                    rows[row] = format!(
-                        "{}\x1b[7m{}\x1b[0m{}",
-                        slice_cells(&plain, 0, from),
-                        slice_cells(&plain, from, to),
-                        slice_cells(&plain, to, usize::MAX)
-                    );
+            for screen_row in 0..chat_height.min(rows.len()) {
+                let content_row = begin + screen_row;
+                if content_row < s.start.0 || content_row > s.end.0 {
+                    continue;
                 }
+                let plain = super::plain(&rows[screen_row]);
+                let from = if content_row == s.start.0 {
+                    s.start.1
+                } else {
+                    0
+                };
+                let to = if content_row == s.end.0 {
+                    s.end.1.saturating_add(1)
+                } else {
+                    width
+                };
+                rows[screen_row] = format!(
+                    "{}\x1b[7m{}\x1b[0m{}",
+                    slice_cells(&plain, 0, from),
+                    slice_cells(&plain, from, to),
+                    slice_cells(&plain, to, usize::MAX)
+                );
             }
         }
         let cursor = frame.cursor.and_then(|(r, c)| {
@@ -194,19 +296,35 @@ impl Viewport {
         self.drawn.clear();
     }
 }
-fn selected_text(screen: &[String], a: (usize, usize), b: (usize, usize)) -> String {
-    if a == b {
+/// Extract selected text from conversation content, independent of the viewport.
+fn selected_rows(
+    history: &[String],
+    frame_lines: &[String],
+    start: (usize, usize),
+    end: (usize, usize),
+    width: usize,
+) -> String {
+    if start == end {
         return String::new();
     }
-    let (start, end) = if a <= b { (a, b) } else { (b, a) };
+    let total = history.len() + frame_lines.len();
+    let last = end.0.min(total.saturating_sub(1));
     let mut rows = Vec::new();
-    for row in start.0..=end.0.min(screen.len().saturating_sub(1)) {
-        let line = super::plain(&screen[row]);
+    for row in start.0..=last {
+        let source = if row < history.len() {
+            history[row].clone()
+        } else {
+            frame_lines
+                .get(row - history.len())
+                .cloned()
+                .unwrap_or_default()
+        };
+        let line = super::plain(&source);
         let from = if row == start.0 { start.1 } else { 0 };
         let to = if row == end.0 {
             end.1.saturating_add(1)
         } else {
-            usize::MAX
+            width
         };
         rows.push(slice_cells(&line, from, to).trim_end().to_owned());
     }
@@ -264,6 +382,47 @@ mod tests {
     }
 
     #[test]
+    fn held_selection_keeps_extending_while_the_wheel_scrolls() {
+        let mut v = Viewport::default();
+        let rows: Vec<String> = (0..20).map(|n| format!("line {n}")).collect();
+        v.append(&rows);
+        v.set_frame(
+            &Frame {
+                lines: vec!["prompt".into()],
+                cursor: None,
+            },
+            0,
+        );
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        v.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        v.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 2, 0));
+        let before = v.selection.as_ref().unwrap().text.clone();
+        assert_eq!(before, "line 16\nline 17\nl");
+
+        v.mouse(mouse(MouseEventKind::ScrollUp, 2, 0));
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        let after = v.selection.as_ref().unwrap().text.clone();
+        assert!(
+            after.lines().count() > before.lines().count(),
+            "scroll must extend the selection: {before:?} -> {after:?}"
+        );
+        assert!(!after.contains("line 17"), "{after:?}");
+        assert!(after.contains("line 14"), "{after:?}");
+
+        let mut bytes = Vec::new();
+        v.selection.as_mut().unwrap().changed -= Duration::from_secs(1);
+        assert!(v.copy_if_due(&mut bytes).unwrap().is_some());
+    }
+
+    #[test]
+    fn appended_separators_never_stack() {
+        let mut v = Viewport::default();
+        v.append(&["первый".into(), "".into()]);
+        v.append(&["".into(), "".into(), "второй".into()]);
+        assert_eq!(v.history, ["первый", "", "второй"]);
+    }
+
+    #[test]
     fn copies_only_after_selection_has_been_idle_for_a_second() {
         let mut v = Viewport::default();
         v.append(&["год 1799".into(), "рождение".into()]);
@@ -278,16 +437,19 @@ mod tests {
         v.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
         v.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 1, 2));
         let mut bytes = Vec::new();
-        v.copy_if_due(&mut bytes).unwrap();
+        assert_eq!(v.copy_if_due(&mut bytes).unwrap(), None);
         assert!(bytes.is_empty());
         v.selection.as_mut().unwrap().changed -= Duration::from_secs(1);
-        v.copy_if_due(&mut bytes).unwrap();
+        assert_eq!(
+            v.copy_if_due(&mut bytes).unwrap(),
+            Some("год 1799\nрож".graphemes(true).count())
+        );
         assert_eq!(
             String::from_utf8(bytes).unwrap(),
             format!("\x1b]52;c;{}\x07", STANDARD.encode("год 1799\nрож"))
         );
         let mut again = Vec::new();
-        v.copy_if_due(&mut again).unwrap();
+        assert_eq!(v.copy_if_due(&mut again).unwrap(), None);
         assert!(again.is_empty());
     }
 }

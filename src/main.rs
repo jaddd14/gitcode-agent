@@ -20,6 +20,8 @@ use gitcode::{
 };
 use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf, time::Duration};
 
+mod detach;
+
 #[derive(Parser)]
 #[command(name = "gitcode", version, about = "Local-first terminal coding agent")]
 struct Cli {
@@ -99,8 +101,16 @@ enum Commands {
     },
 }
 
+fn main() {
+    if let Err(error) = detach::restore_environment() {
+        eprintln!("Ошибка: {error}");
+        std::process::exit(1);
+    }
+    async_main();
+}
+
 #[tokio::main]
-async fn main() {
+async fn async_main() {
     if let Err(error) = logged_run().await {
         eprintln!("Ошибка: {error}");
         std::process::exit(1);
@@ -110,6 +120,14 @@ async fn main() {
 async fn logged_run() -> Result<(), String> {
     // Parse first so help/version never create application state.
     let cli = Cli::parse();
+    if cli.command.is_none()
+        && cli.prompt.is_none()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && detach::launch(cli.continue_session)?
+    {
+        return Ok(());
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or("не задан HOME")?;
@@ -354,13 +372,15 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         .validate(std::path::Path::new("CLI"))
         .map_err(|e| e.to_string())?;
     let bearer = config.provider.protocol != config::Protocol::Anthropic;
-    let client = Client::with_protocol(
+    let mut client = Client::with_protocol(
         &config.provider.base_url,
         secret,
         bearer,
         Duration::from_secs(config.provider.timeout_seconds),
         config.provider.protocol,
     )?;
+    gitcode::effort_preferences::apply(&mut client, &home, &config.model)
+        .map_err(|e| format!("cannot load reasoning effort: {e}"))?;
     let mode = if cli.dangerously_skip_permissions {
         Mode::Bypass
     } else {
@@ -452,18 +472,23 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         let committed = session.messages.len();
         let mut history = session.messages.clone();
         history.push(Message::text(Role::User, prompt));
+        let checkpoint = gitcode::agent::TurnCheckpoint::new(history.clone());
         let started = std::time::Instant::now();
-        let outcome = if format == OutputFormat::StreamJson {
+        let (result, partial) = if format == OutputFormat::StreamJson {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(256);
             let running = async {
-                let result = agent.run(history, Some(&sender)).await;
+                let result = agent
+                    .run_with_checkpoint(history, Some(&sender), Some(&checkpoint))
+                    .await;
                 drop(sender);
                 result
             };
             let output = async {
+                let mut partial = String::new();
                 while let Some(event) = receiver.recv().await {
                     let event = match event {
                         gitcode::provider::canonical::Event::TextDelta { text } => {
+                            partial.push_str(&text);
                             Some(HeadlessEvent::MessageDelta { text })
                         }
                         gitcode::provider::canonical::Event::ThinkingDelta { text } => {
@@ -477,13 +502,36 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                         std::io::stdout().flush().map_err(|e| e.to_string())?;
                     }
                 }
-                Ok::<_, String>(())
+                Ok::<_, String>(partial)
             };
             let (result, emitted) = tokio::join!(running, output);
-            emitted?;
-            result?
+            (result, emitted?)
         } else {
-            agent.run(history, None).await?
+            (
+                agent
+                    .run_with_checkpoint(history, None, Some(&checkpoint))
+                    .await,
+                String::new(),
+            )
+        };
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let recovered = checkpoint.failed(&partial);
+                let appended = recovered[committed..].to_vec();
+                let id = session.id.clone();
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || {
+                    for message in appended {
+                        store.append(&id, &message)?;
+                    }
+                    Ok::<_, std::io::Error>(())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+                return Err(error);
+            }
         };
         let id = session.id.clone();
         let appended = outcome.messages[committed..].to_vec();

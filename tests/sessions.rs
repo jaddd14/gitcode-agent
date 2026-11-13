@@ -407,3 +407,25 @@ fn memory_depth_and_file_count_limits_and_home_equals_project() {
         "once\n"
     );
 }
+
+#[test]
+fn generic_session_titles_show_first_user_prompt_in_the_picker_index() {
+    let f = Fixture::new();
+    let store = f.store();
+    let session = store
+        .create("gitcode session", Some("main".into()))
+        .unwrap();
+    store
+        .append(
+            &session.id,
+            &Message::text(Role::User, "  Найди ошибку\nв проекте  "),
+        )
+        .unwrap();
+    let list = store.list().unwrap();
+    assert_eq!(list[0].metadata.title, "Найди ошибку в проекте");
+    assert_eq!(list[0].metadata.branch.as_deref(), Some("main"));
+    assert_eq!(
+        store.resume(&session.id).unwrap().metadata.title,
+        "gitcode session"
+    );
+}

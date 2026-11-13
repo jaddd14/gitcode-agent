@@ -124,11 +124,40 @@ impl UsageLedger {
     /// Open or initialize the private JSONL usage ledger under an explicit home directory.
     pub fn open(home: &Path) -> io::Result<Self> {
         let dir = home.join(".gitcode");
-        fs::create_dir_all(&dir)?;
+        match fs::symlink_metadata(&dir) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "usage directory must not be a symlink",
+                ));
+            }
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&dir)?;
+        let metadata = fs::symlink_metadata(&dir)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "usage directory must be a private directory",
+            ));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "usage directory must be private",
+                ));
+            }
         }
         let path = dir.join("usage.jsonl");
         if let Ok(meta) = fs::symlink_metadata(&path) {
@@ -144,15 +173,17 @@ impl UsageLedger {
 
     /// Append one usage record with `0600` file permissions.
     pub fn record(&self, entry: &UsageEntry) -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
+        let mut file = options.open(&self.path)?;
+        check_ledger_file(&file)?;
         let line = serde_json::to_string(entry)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         file.write_all(format!("{line}\n").as_bytes())?;
@@ -161,10 +192,19 @@ impl UsageLedger {
 
     /// Read all committed usage entries, optionally filtering by `since_ms`.
     pub fn entries(&self, since_ms: Option<u64>) -> io::Result<Vec<UsageEntry>> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
-        let file = fs::File::open(&self.path)?;
+        let file = match options.open(&self.path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        check_ledger_file(&file)?;
         let reader = BufReader::new(file);
         let mut out = Vec::new();
         for line in reader.lines() {
@@ -180,6 +220,27 @@ impl UsageLedger {
         }
         Ok(out)
     }
+}
+
+fn check_ledger_file(file: &fs::File) -> io::Result<()> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "usage ledger must be a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.permissions().mode() & 0o077 != 0 || metadata.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "usage ledger must be private and have one link",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Aggregated statistics for a slice of usage records.

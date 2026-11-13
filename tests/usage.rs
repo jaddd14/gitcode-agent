@@ -90,3 +90,48 @@ fn pricing_lookup_ledger_roundtrip_and_reports() {
     assert_eq!(rl.reset.as_deref(), Some("12s"));
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[cfg(unix)]
+#[test]
+fn ledger_rejects_link_substitution_and_non_private_files() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let home = std::env::temp_dir().join(format!("gitcode-usage-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let ledger = UsageLedger::open(&home).unwrap();
+    let victim = home.join("victim");
+    std::fs::write(&victim, "untouched").unwrap();
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let path = home.join(".gitcode/usage.jsonl");
+    symlink(&victim, &path).unwrap();
+    assert!(ledger.entries(None).is_err());
+    let entry = UsageEntry {
+        timestamp_ms: 1,
+        session_id: "s".into(),
+        project: "p".into(),
+        provider: "p".into(),
+        model: "m".into(),
+        agent: "a".into(),
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        reasoning_tokens: 0,
+        estimated: false,
+        cost_usd: None,
+        latency_ms: 1,
+        tokens_per_sec: 1.0,
+    };
+    assert!(ledger.record(&entry).is_err());
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "untouched");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::hard_link(&victim, &path).unwrap();
+    assert!(ledger.record(&entry).is_err());
+    assert!(ledger.entries(None).is_err());
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir_all(home.join(".gitcode")).unwrap();
+    let outside = home.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    symlink(&outside, home.join(".gitcode")).unwrap();
+    assert!(UsageLedger::open(&home).is_err());
+    let _ = std::fs::remove_dir_all(&home);
+}
