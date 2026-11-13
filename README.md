@@ -71,6 +71,8 @@ A configured reachable provider is needed for model requests; startup itself doe
 
 On Unix, interactive GitCode uses `tmux` when available so work continues after a terminal or SSH disconnect. Reconnect from the same project directory with `gitcode --continue`. If already running inside tmux, GitCode uses that session. Use Ctrl+C to interrupt a turn and exit GitCode normally to stop the session. Without tmux, GitCode warns and runs attached to the terminal; a reboot or killed tmux server also stops the process.
 
+On Windows, the corresponding integration uses [psmux](https://github.com/psmux/psmux), installed separately. The Windows disconnect and reconnect integration requires native Windows acceptance testing before release.
+
 ```bash
 export ANTHROPIC_API_KEY="<your-key>"
 ./target/release/gitcode -p "Inspect src/lib.rs and summarize the module boundaries"

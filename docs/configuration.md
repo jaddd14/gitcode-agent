@@ -6,4 +6,4 @@ Project configuration cannot redirect the provider, change its credential name, 
 
 See [the example](config.example.toml). Never put a key in this file: `provider.api_key_env` names its environment variable. A private saved credential at `~/.gitcode/credentials/<variable-name>` is the fallback.
 
-`compaction_threshold` is validated configuration, not a promise of automatic semantic compaction. See [limitations](dev/PROGRESS.md#known-gaps) and [providers](providers.md).
+GitCode estimates the conversation size and asks the selected model to summarize older messages when it reaches `compaction_threshold` of `context_window`. The full session remains on disk; the summary and recent messages are used for subsequent model requests. Summarization is an additional provider request and its token usage is recorded. Model summaries can omit details, and the configured window is an estimate rather than a provider guarantee. Set `context_window` to the actual context size of your model when it differs from the default 200,000 tokens.

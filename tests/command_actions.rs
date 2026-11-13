@@ -95,6 +95,7 @@ async fn command_actions_are_honest_permission_checked_and_isolated() {
         system: String::new(),
         max_turns: 4,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let mut status = Status::default();
     let mut messages = vec![Message::text(Role::Assistant, "Ответ для проверки")];

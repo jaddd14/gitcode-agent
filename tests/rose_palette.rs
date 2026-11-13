@@ -246,6 +246,7 @@ async fn palette_audit_covers_header_cards_running_turn_retry_and_permissions() 
         system: "system".into(),
         max_turns: 4,
         max_tokens: 1024,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let mut messages = Vec::new();
     let mut status = Status {

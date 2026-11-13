@@ -84,6 +84,7 @@ async fn approved_write_runs_once_and_rejected_write_does_not_run() {
         system: BASE_PROMPT.into(),
         max_turns: 3,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let (sender, mut requests) = mpsc::channel(4);
     let run = tokio::spawn(async move {

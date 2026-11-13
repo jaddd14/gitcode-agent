@@ -35,6 +35,8 @@ pub struct Status {
     pub cost_usd: Option<f64>,
     /// Whether an active provider turn is currently running.
     pub busy: bool,
+    /// The active request is summarizing earlier conversation.
+    pub compacting: bool,
     /// Elapsed wall-clock seconds for the active turn.
     pub elapsed_secs: u64,
     /// Milliseconds used to animate the active indicator.

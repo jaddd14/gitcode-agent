@@ -267,6 +267,8 @@ pub struct Agent {
     pub max_turns: u32,
     /// Maximum generated tokens per request.
     pub max_tokens: u32,
+    /// Context summarization policy and reusable summary for this session.
+    pub compaction: context::Compaction,
 }
 
 impl Agent {
@@ -332,13 +334,27 @@ impl Agent {
                         .push_str(&format!(" Available profiles: {descriptions}"));
                 }
             }
-            let request = Request {
+            let mut request = Request {
                 model: self.model.clone(),
                 system: self.system.clone(),
                 messages: messages.clone(),
                 tools: definitions,
                 max_tokens: self.max_tokens,
             };
+            let (projection, compact_usage) = self
+                .compaction
+                .prepare(&self.client, &request, progress)
+                .await?;
+            request.messages = projection;
+            for (used, elapsed) in compact_usage {
+                usage.input_tokens += used.input_tokens;
+                usage.output_tokens += used.output_tokens;
+                usage.cache_read_tokens += used.cache_read_tokens;
+                usage.cache_write_tokens += used.cache_write_tokens;
+                usage.reasoning_tokens += used.reasoning_tokens;
+                usage.estimated |= used.estimated;
+                request_usage.push((used, elapsed));
+            }
             let started = std::time::Instant::now();
             let events = self.client.run(&request, progress).await?;
             let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
@@ -352,6 +368,8 @@ impl Agent {
                     Event::TextDelta { text: part } => text.push_str(&part),
                     Event::ThinkingDelta { .. }
                     | Event::RetryNotice { .. }
+                    | Event::CompactionStarted
+                    | Event::CompactionFinished
                     | Event::ToolStarted { .. }
                     | Event::ToolFinished { .. }
                     | Event::SteeringApplied { .. }
@@ -425,7 +443,7 @@ impl Agent {
                     text,
                     messages,
                     usage,
-                    requests: iteration + 1,
+                    requests: request_usage.len().try_into().unwrap_or(u32::MAX),
                     request_usage,
                 });
             }

@@ -140,6 +140,7 @@ async fn every_builtin_command_renders_valid_card_at_widths_60_80_120() {
         system: "system prompt".into(),
         max_turns: 8,
         max_tokens: 4096,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let mut messages = Vec::new();
     let mut status = Status {

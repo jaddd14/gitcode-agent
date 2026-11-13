@@ -25,6 +25,9 @@ mod detach;
 #[derive(Parser)]
 #[command(name = "gitcode", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GITCODE_COMMIT"), ")"), about = "Local-first terminal coding agent")]
 struct Cli {
+    /// Internal marker passed directly to the Windows multiplexer worker.
+    #[arg(long, hide = true)]
+    gitcode_psmux_worker: bool,
     #[command(subcommand)]
     command: Option<Commands>,
     #[arg(short = 'p', long = "print")]
@@ -130,6 +133,7 @@ async fn logged_run() -> Result<(), String> {
         && cli.prompt.is_none()
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
+        && !cli.gitcode_psmux_worker
         && detach::launch(cli.continue_session)?
     {
         return Ok(());
@@ -495,6 +499,10 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         system,
         max_turns: config.max_turns,
         max_tokens: 8192,
+        compaction: gitcode::agent::context::Compaction::new(
+            config.context_window,
+            config.compaction_threshold,
+        ),
     };
     if let Some(prompt) = prompt {
         let format = OutputFormat::parse(&cli.output_format)?;

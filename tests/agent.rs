@@ -82,6 +82,7 @@ async fn scripted_read_then_answer_retains_tool_result() {
         system: BASE_PROMPT.into(),
         max_turns: 4,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let (progress, mut receiver) = tokio::sync::mpsc::channel(32);
     let outcome = agent
@@ -171,6 +172,7 @@ async fn interrupted_turn_keeps_request_completed_tools_and_marks_running_tool()
         system: BASE_PROMPT.into(),
         max_turns: 4,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let initial = vec![Message::text(Role::User, "посмотри dotagent")];
     let checkpoint = TurnCheckpoint::new(initial.clone());
@@ -332,6 +334,7 @@ async fn queued_messages_reach_the_model_after_tools_in_order_without_reexecutio
         system: BASE_PROMPT.into(),
         max_turns: 4,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let initial = vec![Message::text(Role::User, "начни")];
     let checkpoint = TurnCheckpoint::new(initial.clone());

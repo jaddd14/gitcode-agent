@@ -455,6 +455,7 @@ fn decorate_assistant_rows(
 
 fn start_turn_status(status: &mut Status) {
     status.busy = true;
+    status.compacting = false;
     status.subagents.clear();
     status.elapsed_secs = 0;
     status.elapsed_millis = 0;
@@ -465,6 +466,7 @@ fn start_turn_status(status: &mut Status) {
 
 fn finish_turn_status(status: &mut Status, succeeded: bool) {
     status.busy = false;
+    status.compacting = false;
     status.retry_notice = None;
     if succeeded {
         status.subagents.clear();
@@ -1231,6 +1233,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             status.elapsed_secs = started.elapsed().as_secs();
                             status.elapsed_millis = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                             match event {
+                                Some(Progress::CompactionStarted) => status.compacting = true,
+                                Some(Progress::CompactionFinished) => status.compacting = false,
                                 Some(Progress::TextDelta { text }) => {
                                     retry_deadline = None;
                                     status.retry_notice = None;
@@ -1596,6 +1600,15 @@ mod display_regressions {
             .lines
             .iter()
             .any(|line| line.contains("Думаю… (0с · ↓ 0 токенов)")));
+        status.compacting = true;
+        let frame = Frame::input(&Editor::default(), &status, 80, 24);
+        assert!(frame
+            .lines
+            .iter()
+            .any(|line| line.contains("Сжимаю контекст…")));
+        status.compacting = false;
+        let frame = Frame::input(&Editor::default(), &status, 80, 24);
+        assert!(frame.lines.iter().any(|line| line.contains("Думаю…")));
     }
 
     #[test]

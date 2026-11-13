@@ -69,6 +69,9 @@ jobs:
       - name: Strict release quality gate
         run: bash scripts/check.sh
       - run: cargo +1.99.0 build --release --locked
+      - name: Windows terminal disconnect and reconnect
+        if: runner.os == 'Windows'
+        run: python -I scripts/test-windows-detach-ci.py
       - name: Native installer smoke (local HTTP, never an existing public release)
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then

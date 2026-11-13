@@ -148,6 +148,7 @@ async fn end_to_end_soak_across_all_three_protocols_with_checkpoints_sessions_an
         system: format!("{BASE_PROMPT}\n{}", mem.text),
         max_turns: 8,
         max_tokens: 1024,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
 
     let (tx, mut rx) = mpsc::channel(64);

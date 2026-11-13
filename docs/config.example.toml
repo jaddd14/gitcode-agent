@@ -2,6 +2,7 @@ language = "ru"
 model = "claude-opus-5-5"
 max_turns = 50
 compaction_threshold = 0.9
+context_window = 200000
 intro = true
 
 [provider]

@@ -98,6 +98,7 @@ async fn approval_choices_remember_prefix_but_preserve_explicit_rules() {
         system: BASE_PROMPT.into(),
         max_turns: 3,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let (sender, mut approvals) = mpsc::channel(1);
     let run = agent.run_with_approvals(

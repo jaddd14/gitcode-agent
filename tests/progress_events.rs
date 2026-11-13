@@ -174,6 +174,7 @@ async fn tool_lifecycle(with_progress: bool, closed_progress: bool) {
         system: BASE_PROMPT.into(),
         max_turns: 3,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let (tx, rx) = mpsc::channel(1);
     let mut rx = if closed_progress {

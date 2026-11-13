@@ -4,6 +4,11 @@ All notable changes are documented here. This project follows [Keep a Changelog]
 
 ## [0.3.1] - Unreleased
 
+### Added
+
+- Automatic context summaries with retained session history, attachments and a live progress indicator.
+- Windows session persistence through an installed psmux; native Windows disconnect testing is required before release.
+
 ### Fixed
 
 - Hardened project configuration, command completion, session recovery and interactive approvals.

@@ -110,6 +110,7 @@ async fn children_run_in_parallel_with_isolated_context_and_enforced_read_only_t
         system: BASE_PROMPT.into(),
         max_turns: 4,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
     let outcome = tokio::time::timeout(
@@ -231,6 +232,7 @@ async fn interrupt_keeps_completed_child_and_marks_only_the_unfinished_child() {
         system: BASE_PROMPT.into(),
         max_turns: 4,
         max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
     let initial = vec![Message::text(Role::User, "PARENT_CANCEL")];
     let checkpoint = TurnCheckpoint::new(initial.clone());

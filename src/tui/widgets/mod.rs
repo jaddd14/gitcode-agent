@@ -170,7 +170,8 @@ pub fn style_info_panel_row(row: &str, theme: &Theme, mode: ColorMode) -> String
 pub(crate) fn style_live_row(row: &str, theme: &Theme, mode: ColorMode, elapsed_ms: u64) -> String {
     let row = unstyled(row);
     let activity = row.trim_start_matches(' ');
-    if (activity.starts_with("✻ ") || activity.starts_with("* ")) && activity.contains("Думаю…")
+    if (activity.starts_with("✻ ") || activity.starts_with("* "))
+        && (activity.contains("Думаю…") || activity.contains("Сжимаю контекст…"))
     {
         let marker_start = row.len() - activity.len();
         let marker_end = marker_start + activity.chars().next().map(char::len_utf8).unwrap_or(0);
@@ -209,7 +210,8 @@ pub fn style_frame_row_with_panel(
         return row;
     }
     let activity = row.trim_start_matches(' ');
-    if (activity.starts_with("✻ ") || activity.starts_with("* ")) && activity.contains("Думаю…")
+    if (activity.starts_with("✻ ") || activity.starts_with("* "))
+        && (activity.contains("Думаю…") || activity.contains("Сжимаю контекст…"))
     {
         let split = row.find(" (").unwrap_or(row.len());
         return format!(

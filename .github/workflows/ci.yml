@@ -43,6 +43,9 @@ jobs:
         run: cargo test --locked --test foundations executable_authenticates_with_saved_key_and_hides_reflected_errors -- --exact
       - name: Build with declared minimum Rust
         run: cargo +1.99.0 build --release --locked
+      - name: Windows terminal disconnect and reconnect
+        if: runner.os == 'Windows'
+        run: python -I scripts/test-windows-detach-ci.py
       - name: Native executable version and doctor
         run: |
           python -I - <<'PY'

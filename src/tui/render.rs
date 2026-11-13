@@ -148,7 +148,11 @@ impl Frame {
             }
         }
         if status.busy {
-            let verb = "Думаю";
+            let verb = if status.compacting {
+                "Сжимаю контекст"
+            } else {
+                "Думаю"
+            };
             let mark = if glyphs.ascii { '*' } else { '✻' };
             above.push(clip(
                 &format!(

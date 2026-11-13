@@ -168,6 +168,10 @@ pub enum Event {
         /// Scheduled backoff in milliseconds.
         delay_ms: u64,
     },
+    /// The agent is summarizing older conversation context.
+    CompactionStarted,
+    /// Context summarization finished successfully.
+    CompactionFinished,
     /// A validated tool call is about to execute locally.
     ToolStarted {
         /// Original tool call identifier.

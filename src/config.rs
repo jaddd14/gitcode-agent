@@ -65,6 +65,8 @@ pub struct Config {
     pub max_turns: u32,
     /// Automatic compaction threshold as a window fraction.
     pub compaction_threshold: f64,
+    /// Approximate input context window in tokens for automatic compaction.
+    pub context_window: u64,
     /// Enable intro animation in interactive terminals.
     pub intro: bool,
     /// Persisted terminal palette and white-text preference.
@@ -82,6 +84,7 @@ impl Default for Config {
             trust_project_config: false,
             max_turns: 50,
             compaction_threshold: 0.9,
+            context_window: 200_000,
             intro: true,
             theme: crate::theme::ThemeChoice::default(),
             shell: "auto".into(),
@@ -116,6 +119,11 @@ impl Config {
                 "must be auto, bash, pwsh, powershell, or cmd",
             ),
             ("max_turns", self.max_turns > 0, "must be positive"),
+            (
+                "context_window",
+                self.context_window >= 4096,
+                "must be at least 4096 tokens",
+            ),
             (
                 "compaction_threshold",
                 self.compaction_threshold > 0.0 && self.compaction_threshold < 1.0,

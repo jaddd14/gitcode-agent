@@ -553,7 +553,7 @@ pub async fn execute_command(
             let msg_tokens = context::estimate(messages).map_err(io::Error::other)?;
             let used = sys_tokens + tools_tokens + mem_tokens + msg_tokens;
             body.push("Размер окна условный: 200k; оценки по тексту, не данные провайдера.".into());
-            let window = 200_000u64;
+            let window = agent.compaction.window;
             let free = window.saturating_sub(used);
             let ratio = (used as f64 / window as f64).clamp(0.0, 1.0);
             body.push(format!(

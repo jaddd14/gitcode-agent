@@ -321,7 +321,12 @@ pub use unix::{launch, restore_environment};
 pub fn restore_environment() -> Result<(), String> {
     Ok(())
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[path = "detach_windows.rs"]
+mod windows;
+#[cfg(windows)]
+pub use windows::launch;
+#[cfg(not(any(unix, windows)))]
 pub fn launch(_: bool) -> Result<bool, String> {
     Ok(false)
 }
