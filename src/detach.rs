@@ -15,6 +15,7 @@ mod unix {
 
     const MARKER: &str = "GITCODE_TMUX_MANAGED";
     const ENV_FILE: &str = "GITCODE_LAUNCH_ENV";
+    const SOURCE_TERM: &str = "GITCODE_TMUX_SOURCE_TERM";
 
     fn directory(home: &Path) -> Result<PathBuf, String> {
         let path = home.join(".gitcode");
@@ -83,6 +84,10 @@ mod unix {
         fs::remove_file(&path).map_err(|_| "не удалось удалить временное окружение GitCode")?;
         let vars: Vec<(Vec<u8>, Vec<u8>)> =
             serde_json::from_slice(&bytes).map_err(|_| "неверное окружение GitCode")?;
+        let original_term = vars
+            .iter()
+            .find(|(key, value)| key == b"TERM" && !value.contains(&0))
+            .map(|(_, value)| OsString::from_vec(value.clone()));
         for (key, _) in std::env::vars_os() {
             let bytes = key.as_os_str().as_bytes();
             if bytes != b"TERM"
@@ -99,6 +104,7 @@ mod unix {
                 || key == b"TMUX_PANE"
                 || key == MARKER.as_bytes()
                 || key == ENV_FILE.as_bytes()
+                || key == SOURCE_TERM.as_bytes()
                 || key.contains(&0)
                 || key.contains(&b'=')
                 || value.contains(&0)
@@ -107,6 +113,12 @@ mod unix {
                 continue;
             }
             std::env::set_var(OsString::from_vec(key), OsString::from_vec(value));
+        }
+        if let Some(term) = original_term {
+            std::env::set_var(SOURCE_TERM, term);
+        }
+        if let Some(pane) = std::env::var_os("TMUX_PANE") {
+            hide_managed_status(&pane.to_string_lossy())?;
         }
         Ok(())
     }
@@ -158,7 +170,21 @@ mod unix {
                 .args(["select-pane", "-t", pane])
                 .status();
         }
-        let status = Command::new("tmux")
+        let mut command = Command::new("tmux");
+        // -T applies to this client only, leaving the user's server settings intact.
+        if !inside_tmux
+            && matches!(
+                std::env::var("COLORTERM").as_deref(),
+                Ok("truecolor" | "24bit")
+            )
+            && Command::new("tmux")
+                .args(["-T", "RGB", "-V"])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        {
+            command.args(["-T", "RGB"]);
+        }
+        let status = command
             .args([
                 if inside_tmux {
                     "switch-client"
@@ -174,6 +200,20 @@ mod unix {
             Ok(true)
         } else {
             Err("не удалось подключиться к сессии GitCode".into())
+        }
+    }
+
+    fn hide_managed_status(target: &str) -> Result<(), String> {
+        let status = Command::new("tmux")
+            .args(["set-option", "-t", target, "status", "off"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| "не удалось настроить сессию GitCode")?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("не удалось скрыть строку tmux в сессии GitCode".into())
         }
     }
 
@@ -216,6 +256,7 @@ mod unix {
                 .map(|(name, _)| name)
                 .next_back()
             {
+                hide_managed_status(name)?;
                 return attach(name, None, inside_tmux);
             }
             // GitCode launched inside an existing tmux session has no managed
@@ -266,7 +307,8 @@ mod unix {
         home_var.push(&home);
         let mut launch_var = OsString::from(format!("{ENV_FILE}="));
         launch_var.push(&path);
-        let result = Command::new("tmux")
+        let mut command = Command::new("tmux");
+        command
             .arg("new-session")
             .arg("-d")
             .arg("-s")
@@ -278,7 +320,15 @@ mod unix {
             .arg("-e")
             .arg(format!("{MARKER}=1"))
             .arg("-e")
-            .arg(launch_var)
+            .arg(launch_var);
+        // The startup header is written to scrollback once, so the detached
+        // pane must start at the actual terminal size, before a client attaches.
+        if let Ok((width, height)) = crossterm::terminal::size() {
+            if width > 0 && height > 0 {
+                command.args(["-x", &width.to_string(), "-y", &height.to_string()]);
+            }
+        }
+        let result = command
             .arg(executable)
             .args(std::env::args_os().skip(1))
             .stdout(Stdio::null())
@@ -287,6 +337,13 @@ mod unix {
         if !result.is_ok_and(|status| status.success()) {
             let _ = fs::remove_file(path);
             return Err("не удалось создать фоновую сессию GitCode в tmux".into());
+        }
+        if let Err(error) = hide_managed_status(&name) {
+            let _ = fs::remove_file(&path);
+            let _ = Command::new("tmux")
+                .args(["kill-session", "-t", &name])
+                .status();
+            return Err(error);
         }
         // Do not leave a credential-bearing launch file behind if the child fails
         // before reading it. The worker removes it immediately during startup.
@@ -303,15 +360,7 @@ mod unix {
                 .status();
             return Err("не удалось передать окружение фоновой сессии GitCode".into());
         }
-        let status = Command::new("tmux")
-            .args(["attach-session", "-t", &name])
-            .status()
-            .map_err(|_| "не удалось подключиться к сессии GitCode")?;
-        if status.success() {
-            Ok(true)
-        } else {
-            Err("не удалось подключиться к сессии GitCode; используй gitcode --continue".into())
-        }
+        attach(&name, None, false)
     }
 }
 
@@ -325,7 +374,11 @@ pub fn restore_environment() -> Result<(), String> {
 #[path = "detach_windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub use windows::launch;
+pub use windows::{launch, prepare_psmux_worker};
+#[cfg(not(windows))]
+pub fn prepare_psmux_worker() -> Result<(), String> {
+    Ok(())
+}
 #[cfg(not(any(unix, windows)))]
 pub fn launch(_: bool) -> Result<bool, String> {
     Ok(false)

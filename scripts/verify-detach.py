@@ -90,9 +90,9 @@ def main():
         thread = threading.Thread(target=serve, daemon=True)
         thread.start()
         env = dict(os.environ)
-        env.update(HOME=str(home), TERM="xterm-256color", ANTHROPIC_API_KEY="fixture-key-only",
-                   GITCODE_ASCII="1")
-        for key in ("TMUX", "TMUX_PANE", "GITCODE_TMUX_MANAGED", "GITCODE_LAUNCH_ENV"):
+        env.update(HOME=str(home), TERM="xterm-256color", ANTHROPIC_API_KEY="fixture-key-only")
+        for key in ("TMUX", "TMUX_PANE", "GITCODE_TMUX_MANAGED", "GITCODE_LAUNCH_ENV",
+                    "GITCODE_ASCII", "NO_COLOR", "COLORTERM"):
             env.pop(key, None)
         args = [BINARY, "--no-intro", "--base-url", f"http://127.0.0.1:{listener.getsockname()[1]}",
                 "--model", "fixture", "--dangerously-skip-permissions"]
@@ -124,6 +124,28 @@ def main():
                 if sessions() and b"shift+tab" in terminal:
                     break
             assert sessions(), f"managed session did not start: {terminal[-1000:]!r}"
+            session_name = sessions()[0][0]
+            assert subprocess.check_output(
+                ["tmux", "show-options", "-t", session_name, "-v", "status"], text=True
+            ).strip() == "off", "tmux status line is visible"
+            screen = subprocess.check_output(
+                ["tmux", "capture-pane", "-p", "-e", "-t", session_name], text=True
+            )
+            context_row = next((row for row in screen.splitlines() if "ctx " in row), "")
+            assert "\x1b[38;5;239m▯" in context_row, f"wrong context color: {context_row!r}"
+            assert "Несколько вызовов инструмента в одном" in screen, "header was drawn at the wrong width"
+            for rows, columns in ((36, 120), (30, 100)):
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    size = subprocess.check_output(
+                        ["tmux", "display-message", "-p", "-t", session_name, "#{pane_width}x#{pane_height}"],
+                        text=True,
+                    ).strip()
+                    if size == f"{columns}x{rows}":
+                        break
+                    time.sleep(0.1)
+                assert size == f"{columns}x{rows}", f"pane did not resize: {size}"
             assert not list((home / ".gitcode").glob("launch-env-*")), "temporary environment not removed"
             # A quick reconnect can arrive before tmux notices the first terminal
             # closing. It must attach to the existing session, not start a duplicate.

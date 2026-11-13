@@ -114,6 +114,7 @@ def main():
             launch_outer(outer, args)
             managed = wait_for(lambda: next((n for n in names() if n.startswith("gitcode-") and n not in (outer, resume)), None), "managed session")
             wait_for(lambda: "shift+tab" in mux("capture-pane", "-p", "-t", managed, check=False).stdout.lower(), "interactive UI")
+            assert mux("show-options", "-v", "-t", managed, "status").stdout.strip() == "off", "psmux status line is visible"
             mux("send-keys", "-t", managed, "-l", "hello")
             mux("send-keys", "-t", managed, "Enter")
             assert ready.wait(30), f"provider not reached: {errors}"

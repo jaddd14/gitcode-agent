@@ -125,6 +125,9 @@ async fn async_main() {
 async fn logged_run() -> Result<(), String> {
     // Parse first so help/version never create application state.
     let cli = Cli::parse();
+    if cli.gitcode_psmux_worker {
+        detach::prepare_psmux_worker()?;
+    }
     gitcode::update::cleanup_old();
     if matches!(&cli.command, Some(Commands::Update)) {
         return gitcode::update::run().await;

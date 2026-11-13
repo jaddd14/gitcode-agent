@@ -592,12 +592,29 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     let capabilities = Capabilities::detect(true);
     let _guard = TerminalGuard::enter_with_capabilities(capabilities)?;
     let (width, height) = crossterm::terminal::size()?;
+    let render_term = if std::env::var_os("GITCODE_TMUX_MANAGED").is_some() {
+        std::env::var("GITCODE_TMUX_SOURCE_TERM").ok()
+    } else {
+        std::env::var("TERM").ok()
+    };
     let mode = theme::detect(
         true,
         std::env::var_os("NO_COLOR").is_some(),
         std::env::var("COLORTERM").ok().as_deref(),
-        std::env::var("TERM").ok().as_deref(),
+        render_term.as_deref(),
     );
+    #[cfg(windows)]
+    let mode = match std::env::var("GITCODE_PSMUX_COLOR_MODE")
+        .ok()
+        .filter(|_| std::env::var_os("PSMUX_SESSION").is_some())
+        .as_deref()
+    {
+        Some("truecolor") => ColorMode::TrueColor,
+        Some("256") => ColorMode::Indexed256,
+        Some("ansi16") => ColorMode::Ansi16,
+        Some("none") => ColorMode::None,
+        _ => mode,
+    };
     let mut renderer = Renderer::with_capabilities(
         io::stdout(),
         width.into(),

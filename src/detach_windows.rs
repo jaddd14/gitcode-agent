@@ -24,6 +24,29 @@ fn same_directory(left: &Path, right: &Path) -> bool {
         .is_some_and(|(a, b)| a == b)
 }
 
+fn hide_managed_status(multiplexer: &Path, target: &str) -> Result<(), String> {
+    let status = command(multiplexer)
+        .args(["set-option", "-t", target, "status", "off"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|_| "не удалось настроить сессию GitCode")?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("не удалось скрыть строку psmux в сессии GitCode".into())
+    }
+}
+
+/// Apply display settings before the managed worker draws its header.
+pub fn prepare_psmux_worker() -> Result<(), String> {
+    let multiplexer =
+        gitcode::shell::find_executable("psmux.exe").ok_or("не удалось найти psmux")?;
+    let session =
+        std::env::var("PSMUX_SESSION").map_err(|_| "не удалось определить сессию psmux")?;
+    hide_managed_status(&multiplexer, &session)
+}
+
 fn attach(
     multiplexer: &Path,
     target: &str,
@@ -106,6 +129,7 @@ pub fn launch(continue_session: bool) -> Result<bool, String> {
     if continue_session && list.status.success() {
         let sessions = String::from_utf8_lossy(&list.stdout);
         if let Some(name) = sessions.lines().rfind(|name| name.starts_with(&prefix)) {
+            hide_managed_status(&multiplexer, name)?;
             return attach(&multiplexer, name, None, inside);
         }
         if let Ok(panes) = command(&multiplexer)
@@ -149,9 +173,29 @@ pub fn launch(continue_session: bool) -> Result<bool, String> {
     }
     let name = format!("{prefix}{}", std::process::id());
     let executable = std::env::current_exe().map_err(|_| "не удалось определить путь к GitCode")?;
-    let status = command(&multiplexer)
+    let mode = gitcode::theme::detect(
+        true,
+        std::env::var_os("NO_COLOR").is_some(),
+        std::env::var("COLORTERM").ok().as_deref(),
+        std::env::var("TERM").ok().as_deref(),
+    );
+    let color = match mode {
+        gitcode::theme::ColorMode::TrueColor => "truecolor",
+        gitcode::theme::ColorMode::Indexed256 => "256",
+        gitcode::theme::ColorMode::Ansi16 => "ansi16",
+        gitcode::theme::ColorMode::None => "none",
+    };
+    let mut create = command(&multiplexer);
+    create
         .args(["new-session", "-d", "-s", &name, "-c"])
-        .arg(&root)
+        .arg(&root);
+    create.args(["-e", &format!("GITCODE_PSMUX_COLOR_MODE={color}")]);
+    if let Ok((width, height)) = crossterm::terminal::size() {
+        if width > 0 && height > 0 {
+            create.args(["-x", &width.to_string(), "-y", &height.to_string()]);
+        }
+    }
+    let status = create
         .arg("--")
         .arg(executable)
         // An extra argument makes psmux execute argv directly, without a shell.
@@ -164,11 +208,11 @@ pub fn launch(continue_session: bool) -> Result<bool, String> {
     if !status.success() {
         return Err("не удалось создать фоновую сессию GitCode в psmux".into());
     }
-    // Keep the existing GitCode layout rather than adding a multiplexer status bar.
-    let _ = command(&multiplexer)
-        .args(["set-option", "-t", &name, "status", "off"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    if let Err(error) = hide_managed_status(&multiplexer, &name) {
+        let _ = command(&multiplexer)
+            .args(["kill-session", "-t", &name])
+            .status();
+        return Err(error);
+    }
     attach(&multiplexer, &name, None, false)
 }
