@@ -3,6 +3,8 @@
 pub mod app;
 mod approval_picker;
 mod bypass_picker;
+pub mod capabilities;
+pub mod clipboard;
 pub mod commands;
 pub mod diff;
 pub mod effort_picker;

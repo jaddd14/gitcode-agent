@@ -97,6 +97,22 @@ pub fn create(path: &Path, secret: &Secret) -> Result<()> {
     let mut file = options
         .open(path)
         .map_err(|e| io("create credential", path, e))?;
+    #[cfg(windows)]
+    {
+        // Best effort only: a failed ACL operation is not reported as secure storage.
+        if !crate::platform::restrict_credentials(path) {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(io(
+                "restrict credential ACL",
+                path,
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "cannot restrict credential ACL",
+                ),
+            ));
+        }
+    }
     file.write_all(secret.expose().as_bytes())
         .map_err(|e| io("write credential", path, e))?;
     file.sync_all().map_err(|e| io("sync credential", path, e))

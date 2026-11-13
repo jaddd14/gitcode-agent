@@ -1,4 +1,5 @@
 //! Streaming Markdown contract and terminal-safety regression tests.
+#![allow(clippy::unwrap_used)]
 
 // Keep this feature isolated until the application exports the M5 module.
 #[path = "../src/tui/markdown.rs"]

@@ -23,7 +23,7 @@ use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf, time::Duration};
 mod detach;
 
 #[derive(Parser)]
-#[command(name = "gitcode", version, about = "Local-first terminal coding agent")]
+#[command(name = "gitcode", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GITCODE_COMMIT"), ")"), about = "Local-first terminal coding agent")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -65,6 +65,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install a checksum-verified release update.
+    Update,
     /// Execute a single non-interactive prompt (Codex CLI style).
     Exec {
         /// Prompt string to execute.
@@ -120,6 +122,10 @@ async fn async_main() {
 async fn logged_run() -> Result<(), String> {
     // Parse first so help/version never create application state.
     let cli = Cli::parse();
+    gitcode::update::cleanup_old();
+    if matches!(&cli.command, Some(Commands::Update)) {
+        return gitcode::update::run().await;
+    }
     if cli.command.is_none()
         && cli.prompt.is_none()
         && std::io::stdin().is_terminal()
@@ -128,9 +134,8 @@ async fn logged_run() -> Result<(), String> {
     {
         return Ok(());
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or("не задан HOME")?;
+    let home = gitcode::platform::home_dir()
+        .ok_or("не удалось определить домашний каталог (HOME или USERPROFILE)")?;
     let mut logger = tokio::task::spawn_blocking(move || {
         let directory = home.join(".gitcode");
         std::fs::create_dir_all(&directory).map_err(|_| "не удалось создать каталог журнала")?;
@@ -182,9 +187,8 @@ async fn logged_run() -> Result<(), String> {
 
 async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|_| "не удалось определить рабочий каталог")?;
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or("не задан HOME")?;
+    let home = gitcode::platform::home_dir()
+        .ok_or("не удалось определить домашний каталог (HOME или USERPROFILE)")?;
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let mut overrides = Overrides::new();
     if let Some(model) = cli.model.clone() {
@@ -196,11 +200,23 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
     let config_home = home.clone();
     let config_root = root.clone();
     let config_env = env.clone();
-    let config_res = tokio::task::spawn_blocking(move || {
+    let mut config_res = tokio::task::spawn_blocking(move || {
         config::load(&config_home, &config_root, &config_env, &overrides)
     })
     .await
     .map_err(|_| "не удалось загрузить конфигурацию")?;
+    if let Some(name) = cli.provider.as_deref() {
+        let preset = gitcode::provider::registry::presets()
+            .into_iter()
+            .find(|preset| preset.name == name)
+            .ok_or_else(|| format!("неизвестный провайдер: {name}"))?;
+        if let Ok(config) = &mut config_res {
+            config.provider.name = preset.name.into();
+            config.provider.base_url = preset.base_url.into();
+            config.provider.protocol = preset.protocol;
+            config.provider.api_key_env = preset.key_env.into();
+        }
+    }
     if let Ok(config) = &config_res {
         gitcode::theme::set_active(config.theme);
     }
@@ -208,10 +224,14 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         let home = home.clone();
         let key_env = cfg.provider.api_key_env.clone();
         let env = env.clone();
-        tokio::task::spawn_blocking(move || credentials::resolve(&home, &key_env, &env))
-            .await
-            .map_err(|_| "не удалось загрузить ключ провайдера")?
-            .map_err(|_| "не удалось прочитать приватный ключ провайдера")?
+        if key_env.is_empty() {
+            None
+        } else {
+            tokio::task::spawn_blocking(move || credentials::resolve(&home, &key_env, &env))
+                .await
+                .map_err(|_| "не удалось загрузить ключ провайдера")?
+                .map_err(|_| "не удалось прочитать приватный ключ провайдера")?
+        }
     } else {
         None
     };
@@ -306,6 +326,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                 }
                 return Ok(());
             }
+            Commands::Update => return gitcode::update::run().await,
             Commands::Exec { .. } => {}
         }
     }
@@ -386,8 +407,25 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
     } else {
         Mode::Default
     };
-    let tools = Tools::new(Engine::new(&root, mode)?);
+    let mut engine = Engine::new(&root, mode)?;
+    for directory in &cli.add_dirs {
+        engine.add_workspace(directory)?;
+    }
+    let additional_roots = engine.additional_roots.clone();
+    let tools = Tools::with_shell(engine, &config.shell)?;
+    let shell = tools.shell()?;
     let mut system = cli.system_prompt.unwrap_or_else(|| BASE_PROMPT.into());
+    system.push_str(&format!(
+        "\nExecution shell: {}. {}",
+        shell.name(),
+        shell.description()
+    ));
+    if !additional_roots.is_empty() {
+        system.push_str("\nAdditional authorized directories:");
+        for directory in additional_roots {
+            system.push_str(&format!("\n- {}", directory.display()));
+        }
+    }
     if let Some(append) = cli.append_system_prompt {
         system.push('\n');
         system.push_str(&append);

@@ -194,6 +194,10 @@ fn reject_symlinks(path: &Path) -> io::Result<()> {
             return Err(invalid("parent traversal must be normalized"));
         }
         current.push(component);
+        // A Windows prefix becomes a filesystem entry only after RootDir.
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(invalid("memory symlinks are not allowed"))

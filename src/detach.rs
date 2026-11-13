@@ -214,7 +214,7 @@ mod unix {
                 .filter_map(|line| line.split_once('\t'))
                 .filter(|(name, _)| name.starts_with(&prefix))
                 .map(|(name, _)| name)
-                .last()
+                .next_back()
             {
                 return attach(name, None, inside_tmux);
             }
@@ -247,7 +247,7 @@ mod unix {
                     (same_project && executable.as_deref() == Some(std::ffi::OsStr::new(command)))
                         .then_some((pane, session))
                 })
-                .last()
+                .next_back()
             {
                 return attach(session, Some(pane), inside_tmux);
             }

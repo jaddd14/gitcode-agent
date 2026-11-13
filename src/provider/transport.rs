@@ -453,6 +453,7 @@ fn fill_missing_output_usage(events: &mut Vec<Event>) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod usage_tests {
     use super::*;
     use crate::provider::canonical::Usage;

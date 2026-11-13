@@ -72,19 +72,26 @@ pub struct Outcome {
 }
 
 /// Ordered input waiting for the current turn or a later slash command.
+type QueuedInput = (String, Option<Content>);
+
+/// Ordered input waiting for the current turn or a later slash command.
 #[derive(Clone, Default)]
 pub struct InputQueue {
-    inner: Arc<Mutex<VecDeque<String>>>,
+    inner: Arc<Mutex<VecDeque<QueuedInput>>>,
     applied: Arc<tokio::sync::Notify>,
 }
 
 impl InputQueue {
     /// Enqueue a user entry in submission order.
     pub fn push_back(&self, input: String) {
+        self.push_with_image(input, None);
+    }
+    /// Queue a prompt together with its optional image attachment.
+    pub fn push_with_image(&self, input: String, image: Option<Content>) {
         self.inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push_back(input);
+            .push_back((input, image));
     }
     /// Number of entries still waiting to be sent.
     pub fn len(&self) -> usize {
@@ -96,6 +103,10 @@ impl InputQueue {
     }
     /// Remove the next entry for processing after a turn.
     pub fn pop_front(&self) -> Option<String> {
+        self.pop_front_with_image().map(|(text, _)| text)
+    }
+    /// Remove the next prompt and its staged image together.
+    pub fn pop_front_with_image(&self) -> Option<(String, Option<Content>)> {
         self.inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -105,12 +116,12 @@ impl InputQueue {
     pub fn clear(&self) {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
-    fn take_messages(&self) -> Vec<String> {
+    fn take_messages(&self) -> Vec<(String, Option<Content>)> {
         let mut entries = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut messages = Vec::new();
         while entries
             .front()
-            .is_some_and(|entry| !entry.trim_start().starts_with(['/', '!']))
+            .is_some_and(|(entry, _)| !entry.trim_start().starts_with(['/', '!']))
         {
             if let Some(entry) = entries.pop_front() {
                 messages.push(entry);
@@ -137,15 +148,21 @@ async fn apply_queued_messages(
     if entries.is_empty() {
         return false;
     }
-    for entry in &entries {
-        messages.push(Message::text(Role::User, entry.clone()));
+    for (entry, image) in &entries {
+        let mut message = Message::text(Role::User, entry.clone());
+        if let Some(image) = image {
+            message.content.push(image.clone());
+        }
+        messages.push(message);
     }
     if let Some(checkpoint) = checkpoint {
         checkpoint.update(messages.clone(), false);
     }
     if let Some(progress) = progress {
         if progress
-            .send(Event::SteeringApplied { messages: entries })
+            .send(Event::SteeringApplied {
+                messages: entries.into_iter().map(|(text, _)| text).collect(),
+            })
             .await
             .is_ok()
         {
@@ -556,10 +573,13 @@ impl Agent {
                 let started = std::time::Instant::now();
                 let result = if name == "Bash" {
                     if let Some(command) = input.get("command").and_then(|value| value.as_str()) {
-                        match crate::tools::shell::permission_decision(
-                            &self.tools.permissions,
-                            command,
-                        ) {
+                        match self.tools.shell().and_then(|shell| {
+                            crate::tools::shell::permission_decision_for(
+                                &self.tools.permissions,
+                                command,
+                                shell.kind,
+                            )
+                        }) {
                             Ok(crate::perm::Decision::Ask) => {
                                 let decision = if self.tools.shell_is_remembered(command) {
                                     ShellApproval::Once
@@ -692,6 +712,7 @@ struct ChildOutcome {
     request_usage: Vec<(Usage, u64)>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_subagent(
     client: &Client,
     permissions: crate::perm::Engine,
@@ -744,6 +765,7 @@ async fn run_subagent(
     outcome
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_subagent_inner(
     client: &Client,
     permissions: crate::perm::Engine,

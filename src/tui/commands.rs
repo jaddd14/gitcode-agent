@@ -124,9 +124,7 @@ pub fn popup(text: &str, selected: usize, width: usize, capacity: usize) -> Vec<
 }
 
 fn home_dir(fallback: &Path) -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| fallback.to_path_buf())
+    crate::platform::home_dir().unwrap_or_else(|| fallback.to_path_buf())
 }
 
 /// Return the short permission label displayed on the prompt border.
@@ -1058,10 +1056,20 @@ pub async fn execute_command(
                     .collect::<Vec<_>>()
                     .join("\n");
                 let chars = text.chars().count();
-                body.push("Копирование не выполнено: системный буфер обмена не подключён.".into());
-                body.push(format!("Последний ответ содержит {chars} симв. Используй /export <путь.json> для сохранения."));
-                if let Some(first) = text.lines().next() {
-                    body.push(format!("Фрагмент: {first}"));
+                match super::clipboard::copy_text(&text).await {
+                    Ok(()) => {
+                        body.push(format!(
+                            "Ответ скопирован в системный буфер обмена: {chars} симв."
+                        ));
+                        status.toast = Some("Скопировано".into());
+                    }
+                    Err(_) => {
+                        body.push("Копирование не выполнено: системный буфер обмена недоступен в этом окружении.".into());
+                        body.push(format!("Последний ответ содержит {chars} симв. Используй /export <путь.json> для сохранения."));
+                        if let Some(first) = text.lines().next() {
+                            body.push(format!("Фрагмент: {first}"));
+                        }
+                    }
                 }
             } else {
                 body.push("В текущей сессии ещё нет ответов ассистента для копирования.".into());
@@ -1099,24 +1107,26 @@ pub async fn execute_command(
             ".gitcode/skills/<имя>/SKILL.md"
         }
         "add-dir" => {
-            body.push("Дополнительные корни не добавляются; команда только проверяет папку внутри проекта.".into());
             body.push(format!("Основная рабочая папка: {}", root.display()));
             if args.is_empty() {
-                body.push("Укажи путь для проверки доступа: /add-dir <папка>".into());
+                body.push("Укажи путь: /add-dir <папка>".into());
+                for directory in &agent.tools.permissions.additional_roots {
+                    body.push(format!("Дополнительная папка: {}", directory.display()));
+                }
             } else {
-                let candidate = root.join(args);
-                match agent.tools.permissions.existing(&candidate) {
-                    Ok(resolved) if resolved.is_dir() => {
-                        body.push(format!(
-                            "Директория подтверждена внутри границ проекта: {}",
+                match agent
+                    .tools
+                    .permissions
+                    .add_workspace(std::path::Path::new(args))
+                {
+                    Ok(resolved) => {
+                        agent.system.push_str(&format!(
+                            "\nAdditional authorized directory: {}.",
                             resolved.display()
                         ));
+                        body.push(format!("Добавлена рабочая папка: {}", resolved.display()));
                     }
-                    _ => {
-                        body.push(
-                            "Путь не является доступной папкой внутри рабочей области.".into(),
-                        );
-                    }
+                    Err(_) => body.push("Не удалось открыть указанную папку.".into()),
                 }
             }
             "/permissions правила доступа к путям"

@@ -64,7 +64,22 @@ impl Rule {
     }
     fn matches(&self, tool: &str, resource: &str) -> bool {
         (self.tool == tool || self.tool == "*")
-            && globset::Glob::new(&self.pattern)
+            && globset::GlobBuilder::new(&self.pattern)
+                .case_insensitive(
+                    cfg!(windows)
+                        && matches!(
+                            tool,
+                            "Read"
+                                | "Write"
+                                | "Edit"
+                                | "MultiEdit"
+                                | "NotebookEdit"
+                                | "LS"
+                                | "apply_patch"
+                        ),
+                )
+                .backslash_escape(!cfg!(windows) || tool == "Bash")
+                .build()
                 .is_ok_and(|g| g.compile_matcher().is_match(resource))
     }
 }
@@ -76,6 +91,8 @@ pub struct Engine {
     pub mode: Mode,
     /// Canonical workspace root.
     pub root: PathBuf,
+    /// Additional explicitly authorized workspace directories.
+    pub additional_roots: Vec<PathBuf>,
     /// Explicit deny rules take highest precedence.
     pub deny: Vec<Rule>,
     /// Explicit ask rules precede allow rules.
@@ -92,10 +109,36 @@ impl Engine {
             root: root
                 .canonicalize()
                 .map_err(|_| "cannot resolve workspace")?,
+            additional_roots: vec![],
             deny: vec![],
             ask: vec![],
             allow: vec![],
         })
+    }
+
+    /// Add a directory explicitly authorized by the operator.
+    pub fn add_workspace(&mut self, path: &Path) -> Result<PathBuf, String> {
+        let requested = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let resolved = requested
+            .canonicalize()
+            .map_err(|_| "cannot resolve additional directory")?;
+        if !resolved.is_dir() {
+            return Err("additional path must be a directory".into());
+        }
+        if !self.additional_roots.contains(&resolved) && resolved != self.root {
+            self.additional_roots.push(resolved.clone());
+        }
+        Ok(resolved)
+    }
+
+    pub(crate) fn workspace_for(&self, path: &Path) -> Option<&Path> {
+        std::iter::once(self.root.as_path())
+            .chain(self.additional_roots.iter().map(PathBuf::as_path))
+            .find(|root| crate::platform::path_within(path, root))
     }
 
     /// Decide using rule precedence and a read-only plan boundary.
@@ -134,6 +177,8 @@ impl Engine {
 
     /// Resolve an existing resource and reject symlink escapes from workspace.
     pub fn existing(&self, path: &Path) -> Result<PathBuf, String> {
+        #[cfg(windows)]
+        crate::platform::validate_windows_path(path)?;
         let path = if path.is_absolute() {
             path.to_owned()
         } else {
@@ -142,7 +187,7 @@ impl Engine {
         let canonical = path
             .canonicalize()
             .map_err(|_| "cannot resolve tool path")?;
-        if !canonical.starts_with(&self.root) {
+        if self.workspace_for(&canonical).is_none() {
             return Err("path is outside the workspace boundary".into());
         }
         Ok(canonical)

@@ -53,6 +53,11 @@ pub(super) fn elapsed_duration(mut seconds: u64) -> String {
     parts.push(format!("{seconds}с"));
     parts.join(" ")
 }
+use super::capabilities::Capabilities;
+use crossterm::{
+    terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate},
+    QueueableCommand,
+};
 
 /// Cursor-aware projection ready to paint without provider or filesystem work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,10 +263,34 @@ pub struct Renderer<W: Write> {
     kitty_graphics: bool,
     kitty_logo_loaded: bool,
     kitty_logo_position: Option<(usize, usize)>,
+    capabilities: Capabilities,
 }
 impl<W: Write> Renderer<W> {
-    /// Create an output sink. Noninteractive mode writes finalized text only.
+    /// Create an output sink with historical synchronized byte output.
+    /// Noninteractive mode writes finalized text only. Runtime callers should use
+    /// `with_capabilities` with detected policy instead of assuming support.
     pub fn new(writer: W, width: usize, height: usize, mode: ColorMode, interactive: bool) -> Self {
+        Self::with_capabilities(
+            writer,
+            width,
+            height,
+            mode,
+            interactive,
+            Capabilities {
+                synchronized_output: true,
+                ..Capabilities::default()
+            },
+        )
+    }
+    /// Create an output sink with explicit, deterministic extension policy.
+    pub fn with_capabilities(
+        writer: W,
+        width: usize,
+        height: usize,
+        mode: ColorMode,
+        interactive: bool,
+        capabilities: Capabilities,
+    ) -> Self {
         Self {
             writer: BufWriter::with_capacity(64 * 1024, writer),
             viewport: None,
@@ -283,6 +312,7 @@ impl<W: Write> Renderer<W> {
             kitty_graphics: interactive && kitty_graphics_available(),
             kitty_logo_loaded: false,
             kitty_logo_position: None,
+            capabilities,
         }
     }
     /// Use a fixed composer with mouse scrolling and selection.
@@ -353,15 +383,19 @@ impl<W: Write> Renderer<W> {
         if self.in_sync {
             return body(self);
         }
-        self.writer.write_all(b"\x1b[?2026h")?;
+        if !self.capabilities.synchronized_output {
+            let result = body(self);
+            return result.and(self.writer.flush());
+        }
+        self.writer.queue(BeginSynchronizedUpdate)?;
         self.in_sync = true;
         let result = body(self);
         self.in_sync = false;
         // Close even when body fails so a recoverable write never strands sync mode.
         let close = self
             .writer
-            .write_all(b"\x1b[?2026l")
-            .and_then(|()| self.writer.flush());
+            .queue(EndSynchronizedUpdate)
+            .and_then(|writer| writer.flush());
         result.and(close)
     }
     fn begin_output(&mut self, rows: usize) {
@@ -689,7 +723,7 @@ impl<W: Write> Renderer<W> {
             })
             .collect::<Vec<_>>();
         let logo_position = logo.map(|logo| (logo.row, logo.column));
-        let logo_ready = logo_position.map_or(true, |position| {
+        let logo_ready = logo_position.is_none_or(|position| {
             !self.kitty_graphics || self.kitty_logo_position == Some(position)
         });
         if self.live_valid
@@ -1014,6 +1048,7 @@ mod subagent_spinner_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod clipboard_notice_tests {
     use super::*;
     use crate::tui::input::Editor;

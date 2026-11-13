@@ -145,13 +145,13 @@ mod tests {
     fn menu_fits_about_a_third_of_the_terminal_with_selected_level_visible() {
         for height in [15, 20, 25, 40] {
             let limit = picker::height(height);
-            for selected in 0..LEVELS.len() {
+            for (selected, (level, _)) in LEVELS.iter().enumerate() {
                 let lines = rows("gpt-6.1-sol", None, selected, 80, limit, ColorMode::None);
                 assert!(lines.len() <= limit);
                 assert!(lines.iter().any(|line| line.contains(&format!(
                     "› {}. {}",
                     selected + 1,
-                    LEVELS[selected].0
+                    level
                 ))));
             }
         }

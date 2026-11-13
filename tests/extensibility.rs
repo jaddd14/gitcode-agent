@@ -4,6 +4,11 @@
 #[path = "../src/extensibility.rs"]
 mod extensibility;
 
+#[cfg(windows)]
+mod platform {
+    pub use gitcode::platform::*;
+}
+
 use extensibility::{
     complete_slash, complete_slash_with_custom, discover_skills, expand_command_template,
     format_skill_index, load_custom_commands, load_skill_body, run_hook, run_matching_hooks,
@@ -12,7 +17,10 @@ use extensibility::{
 use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_file as symlink;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 

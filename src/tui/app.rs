@@ -1,6 +1,7 @@
 //! Minimal interactive orchestration with native scrollback and cancellable turns.
 
 use super::{
+    capabilities::{Capabilities, TerminalFeedback},
     commands,
     header::Header,
     input::{Action, Editor},
@@ -160,6 +161,7 @@ fn completion_line(
 
 #[cfg(test)]
 #[path = "../../tests/tui_progress/regression.rs"]
+#[allow(clippy::unwrap_used)]
 mod regression;
 
 /// Cached startup metadata; construction must not block on git or network work.
@@ -211,6 +213,7 @@ fn remove_queued_prompt(status: &mut Status, prompt: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint(
     renderer: &mut Renderer<io::Stdout>,
     editor: &Editor,
@@ -515,6 +518,21 @@ fn style_tool_rows(
         .collect()
 }
 
+async fn stage_clipboard_image(editor: &mut Editor, status: &mut Status) {
+    use crate::i18n::{text, Key, Language};
+    status.toast = Some(match super::clipboard::paste_image().await {
+        Ok(Some(image)) => {
+            editor.set_image(image);
+            text(Language::default(), Key::ImageStaged).into()
+        }
+        Ok(None) => text(Language::default(), Key::ClipboardNoImage).into(),
+        Err(error) => format!(
+            "{}: {error}",
+            text(Language::default(), Key::ImageNotAttached)
+        ),
+    });
+}
+
 async fn handle_aux_action(
     act: &Action,
     renderer: &mut Renderer<io::Stdout>,
@@ -569,7 +587,8 @@ async fn handle_aux_action(
 ///
 /// Completed and interrupted turns are persisted when a session is supplied.
 pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
-    let _guard = TerminalGuard::enter()?;
+    let capabilities = Capabilities::detect(true);
+    let _guard = TerminalGuard::enter_with_capabilities(capabilities)?;
     let (width, height) = crossterm::terminal::size()?;
     let mode = theme::detect(
         true,
@@ -577,7 +596,16 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
         std::env::var("COLORTERM").ok().as_deref(),
         std::env::var("TERM").ok().as_deref(),
     );
-    let mut renderer = Renderer::new(io::stdout(), width.into(), height.into(), mode, true);
+    let mut renderer = Renderer::with_capabilities(
+        io::stdout(),
+        width.into(),
+        height.into(),
+        mode,
+        true,
+        capabilities,
+    );
+    let feedback = TerminalFeedback::detect(true);
+    let _ = feedback.set_title(&mut io::stdout());
     let mut events = EventStream::new();
     let mut editor = Editor::default();
     let mut initial = None;
@@ -632,10 +660,12 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             None,
             mode,
         )?;
+        let mut submitted_image = None;
         let pending = if !status.bypass_confirmation && !queue.is_empty() {
-            let Some(prompt) = queue.pop_front() else {
+            let Some((prompt, image)) = queue.pop_front_with_image() else {
                 continue;
             };
+            submitted_image = image;
             remove_queued_prompt(&mut status, &prompt);
             status.queued = queue.len();
             Action::Submit(prompt)
@@ -668,12 +698,20 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         continue;
                     }
                 }
-                action(event, &mut editor, &mut renderer)
+                let next = action(event, &mut editor, &mut renderer);
+                if matches!(next, Action::Submit(_)) {
+                    submitted_image = editor.take_image();
+                }
+                next
             } else {
                 Action::Refresh
             }
         };
         match pending {
+            Action::PasteImage => {
+                stage_clipboard_image(&mut editor, &mut status).await;
+                exit_armed = false;
+            }
             Action::Exit => return Ok(()),
             Action::Interrupt => {
                 if exit_armed {
@@ -685,6 +723,16 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             Action::Submit(mut prompt) => {
                 exit_armed = false;
                 status.toast = None;
+                if prompt.starts_with('/') && submitted_image.is_some() {
+                    status.toast = Some(
+                        crate::i18n::text(
+                            crate::i18n::Language::default(),
+                            crate::i18n::Key::CommandImageRejected,
+                        )
+                        .into(),
+                    );
+                    continue;
+                }
                 if let Some(command) = prompt.strip_prefix('/') {
                     let (name, args) = command
                         .split_once(char::is_whitespace)
@@ -694,9 +742,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         .any(|c| c.name == name)
                         || name == "new";
                     if !is_builtin {
-                        let home = std::env::var_os("HOME")
-                            .map(std::path::PathBuf::from)
-                            .ok_or_else(|| io::Error::other("HOME is required"))?;
+                        let home = crate::platform::home_dir()
+                            .ok_or_else(|| io::Error::other("home directory is required"))?;
                         let root = agent.tools.permissions.root.clone();
                         let name = name.to_owned();
                         let args = args.to_owned();
@@ -763,9 +810,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     if let Some(choice) =
                         super::theme_picker::select(&mut renderer, &mut events).await?
                     {
-                        let home = std::env::var_os("HOME")
-                            .map(std::path::PathBuf::from)
-                            .ok_or_else(|| io::Error::other("HOME is required"))?;
+                        let home = crate::platform::home_dir()
+                            .ok_or_else(|| io::Error::other("home directory is required"))?;
                         let saved = tokio::task::spawn_blocking(move || {
                             crate::config::save_theme(&home, choice)
                         })
@@ -778,6 +824,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                 status.toast = Some(format!("Тема: {}", choice.preset.label()));
                             }
                             Err(error) => {
+                                renderer.set_theme(Theme::default());
                                 status.toast = Some(format!("Тема не сохранена: {error}"))
                             }
                         }
@@ -933,9 +980,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     continue;
                 }
                 if prompt.trim() == "/usage" {
-                    let home = std::env::var_os("HOME")
-                        .map(std::path::PathBuf::from)
-                        .ok_or_else(|| io::Error::other("HOME is required"))?;
+                    let home = crate::platform::home_dir()
+                        .ok_or_else(|| io::Error::other("home directory is required"))?;
                     let entries = tokio::task::spawn_blocking(move || {
                         crate::usage::UsageLedger::open(&home)?.entries(None)
                     })
@@ -1067,7 +1113,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     mode,
                 ))?;
                 let mut request = messages.clone();
-                request.push(Message::text(Role::User, prompt));
+                let mut user_message = Message::text(Role::User, prompt);
+                if let Some(image) = submitted_image {
+                    user_message.content.push(image);
+                }
+                request.push(user_message);
                 let (sender, mut progress) = mpsc::channel(256);
                 let (approval_sender, mut approvals) = mpsc::channel(1);
                 let mut approval: Option<super::approval_picker::Pending> = None;
@@ -1117,7 +1167,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                         let id = session.id.clone();
                                         let appended = outcome.messages[messages.len()..].to_vec();
                                         let requests = outcome.request_usage.clone();
-                                        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or_else(|| io::Error::other("HOME is required"))?;
+                                        let home = crate::platform::home_dir().ok_or_else(|| io::Error::other("home directory is required"))?;
                                         let project = session.project.clone();
                                         let provider = options.provider.to_owned();
                                         let model = ledger_model.clone();
@@ -1149,6 +1199,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     }
                                     let line = completion_line(finished_at, elapsed, &outcome.usage, renderer.size().0.saturating_sub(1), mode);
                                     renderer.finalize_styled(&[line, String::new()])?;
+                                    let _ = feedback.notify_completed_turn(&mut io::stdout());
+                                    tokio::spawn(async move { let _ = feedback.notify_completed_turn_native().await; });
                                 }
                                 Err(error) => {
                                     recovery = Some(false);
@@ -1350,8 +1402,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                 }
                                 Action::Submit(prompt) => {
                                     status.queued_prompts.push(prompt.clone());
-                                    queue.push_back(prompt);
+                                    queue.push_with_image(prompt, editor.take_image());
                                     status.queued = queue.len();
+                                }
+                                Action::PasteImage => {
+                                    stage_clipboard_image(&mut editor, &mut status).await;
                                 }
                                 Action::Transcript => {
                                     let w = renderer.size().0.saturating_sub(1).max(20);
@@ -1496,6 +1551,7 @@ mod completion_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod display_regressions {
     use super::*;
     #[test]

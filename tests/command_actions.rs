@@ -21,6 +21,7 @@ use unicode_width::UnicodeWidthStr;
 struct Sandbox {
     root: PathBuf,
     previous_home: Option<std::ffi::OsString>,
+    previous_profile: Option<std::ffi::OsString>,
 }
 impl Sandbox {
     fn new() -> Self {
@@ -34,11 +35,15 @@ impl Sandbox {
         ));
         std::fs::create_dir_all(root.join("home")).unwrap();
         std::fs::create_dir_all(root.join("workspace")).unwrap();
+        let root = root.canonicalize().unwrap();
         let previous_home = std::env::var_os("HOME");
+        let previous_profile = std::env::var_os("USERPROFILE");
         std::env::set_var("HOME", root.join("home"));
+        std::env::set_var("USERPROFILE", root.join("home"));
         Self {
             root,
             previous_home,
+            previous_profile,
         }
     }
 }
@@ -48,6 +53,11 @@ impl Drop for Sandbox {
             std::env::set_var("HOME", home);
         } else {
             std::env::remove_var("HOME");
+        }
+        if let Some(profile) = &self.previous_profile {
+            std::env::set_var("USERPROFILE", profile);
+        } else {
+            std::env::remove_var("USERPROFILE");
         }
         let _ = std::fs::remove_dir_all(&self.root);
     }

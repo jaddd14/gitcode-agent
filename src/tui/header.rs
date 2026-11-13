@@ -154,7 +154,6 @@ impl Header<'_> {
         _status: &Status,
         height: usize,
     ) -> Vec<String> {
-        let width = width.min(INFO_PANEL_WIDTH);
         if width < 4 {
             return vec![String::new()];
         }
@@ -284,8 +283,7 @@ impl Header<'_> {
         if mode == ColorMode::None {
             return rows;
         }
-        let wide =
-            width.min(INFO_PANEL_WIDTH).saturating_sub(2) >= 65 && height >= INFO_PANEL_ROWS + 11;
+        let wide = width.saturating_sub(2) >= 65 && height >= INFO_PANEL_ROWS + 11;
         rows.into_iter()
             .enumerate()
             .map(|(index, row)| {
@@ -311,8 +309,7 @@ impl Header<'_> {
                 } else {
                     ""
                 };
-                let (copy, releases) = if wide && width.min(INFO_PANEL_WIDTH) >= RELEASES_MIN_WIDTH
-                {
+                let (copy, releases) = if wide && width >= RELEASES_MIN_WIDTH {
                     let split = copy
                         .char_indices()
                         .nth(3 + COPY_WIDTH + 2)
@@ -410,7 +407,7 @@ mod tests {
             let rows = &rows[..rows.len() - HEADER_GAP];
             for row in rows {
                 let row = crate::tui::widgets::unstyled(row);
-                assert_eq!(row.width(), width.min(INFO_PANEL_WIDTH), "{row}");
+                assert_eq!(row.width(), width, "{row}");
             }
             assert!(rows
                 .iter()
@@ -587,9 +584,7 @@ mod style_tests {
             for mode in [ColorMode::None, ColorMode::TrueColor, ColorMode::Ansi16] {
                 let rows = header.lines(width, &Theme::default(), mode);
                 let rows = &rows[..rows.len() - HEADER_GAP];
-                assert!(rows
-                    .iter()
-                    .all(|row| plain(row).width() == width.min(INFO_PANEL_WIDTH)));
+                assert!(rows.iter().all(|row| plain(row).width() == width));
                 for row in rows {
                     let row = plain(row);
                     assert!(!row.starts_with(['╭', '╰', '│']));

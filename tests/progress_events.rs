@@ -183,12 +183,14 @@ async fn tool_lifecycle(with_progress: bool, closed_progress: bool) {
         Some(rx)
     };
     let run = tokio::spawn(async move {
-        agent
+        let result = agent
             .run(
                 vec![Message::text(Role::User, "execute tools")],
                 with_progress.then_some(&tx),
             )
-            .await
+            .await;
+        agent.tools.shutdown().await.unwrap();
+        result
     });
     let mut lifecycle = Vec::new();
     if with_progress {

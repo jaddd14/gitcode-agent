@@ -14,6 +14,33 @@ use std::{
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+fn isolated_environment(home: &std::path::Path) -> BTreeMap<String, std::ffi::OsString> {
+    let mut env = BTreeMap::from([
+        ("HOME".into(), home.as_os_str().to_owned()),
+        ("USERPROFILE".into(), home.as_os_str().to_owned()),
+    ]);
+    for name in ["SystemRoot", "COMSPEC", "PATH"] {
+        if let Some(value) = std::env::var_os(name) {
+            env.insert(name.into(), value);
+        }
+    }
+    env
+}
+
+#[test]
+fn subprocess_environment_isolates_both_home_variables() {
+    let fixture = Fixture::new();
+    let env = isolated_environment(&fixture.0);
+    for name in ["HOME", "USERPROFILE"] {
+        assert_eq!(env.get(name).unwrap(), fixture.0.as_os_str());
+    }
+    for name in ["SystemRoot", "COMSPEC", "PATH"] {
+        assert_eq!(env.get(name), std::env::var_os(name).as_ref());
+    }
+    assert!(!env.contains_key("GITCODE_SHELL"));
+    assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+}
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -199,7 +226,10 @@ fn executable_uses_stored_credentials_without_polluting_stdout() {
     std::fs::create_dir_all(project.join(".gitcode")).unwrap();
     std::fs::write(
         home.join(".gitcode/config.toml"),
-        "[provider]\napi_key_env = 'ISOLATED_CREDENTIAL'\n",
+        format!(
+            "shell = '{}'\n[provider]\napi_key_env = 'ISOLATED_CREDENTIAL'\n",
+            if cfg!(windows) { "cmd" } else { "bash" }
+        ),
     )
     .unwrap();
     credentials::create(
@@ -210,8 +240,7 @@ fn executable_uses_stored_credentials_without_polluting_stdout() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_gitcode"))
         .args(["doctor", "--json"])
         .env_clear()
-        .env("HOME", &home)
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .envs(isolated_environment(&home))
         .current_dir(&project)
         .output()
         .unwrap();
@@ -226,6 +255,37 @@ fn executable_uses_stored_credentials_without_polluting_stdout() {
         .unwrap()
         .iter()
         .any(|check| check["name"] == "credentials" && check["ok"] == true));
+    let checks = report["checks"].as_array().unwrap();
+    let shell = checks
+        .iter()
+        .find(|check| check["name"] == "shell")
+        .unwrap();
+    assert_eq!(shell["ok"], true);
+    assert!(shell["detail"]
+        .as_str()
+        .unwrap()
+        .contains(if cfg!(windows) {
+            "selected shell: cmd (selection: cmd)"
+        } else {
+            "selected shell: bash (selection: bash)"
+        }));
+    #[cfg(windows)]
+    {
+        let sandbox = checks
+            .iter()
+            .find(|check| check["name"] == "sandbox")
+            .unwrap();
+        assert!(sandbox["detail"]
+            .as_str()
+            .unwrap()
+            .contains("enforced at tool level, not OS level"));
+        let terminal = checks
+            .iter()
+            .find(|check| check["name"] == "terminal")
+            .unwrap();
+        assert_eq!(terminal["ok"], true);
+        assert!(terminal["detail"].as_str().unwrap().contains("WARNING"));
+    }
     let log = std::fs::read_to_string(home.join(".gitcode/gitcode.log")).unwrap();
     assert!(log.contains("application started"));
     assert!(log.contains("application finished"));
@@ -342,8 +402,7 @@ fn executable_authenticates_with_saved_key_and_hides_reflected_errors() {
                 "stream-json",
             ])
             .env_clear()
-            .env("HOME", &home)
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .envs(isolated_environment(&home))
             .current_dir(&project)
             .output()
             .unwrap();

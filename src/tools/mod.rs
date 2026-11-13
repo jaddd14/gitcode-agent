@@ -30,6 +30,7 @@ pub struct Tools {
     next_job_id: u64,
     todos: crate::agent::agency::TodoList,
     approved_shell_prefixes: Vec<String>,
+    shell_selection: String,
 }
 
 impl Tools {
@@ -43,7 +44,33 @@ impl Tools {
             next_job_id: 1,
             todos: crate::agent::agency::TodoList::new(),
             approved_shell_prefixes: Vec::new(),
+            shell_selection: "auto".into(),
         }
+    }
+
+    /// Stop owned background jobs and reap the persistent interpreter before
+    /// releasing its workspace (Windows processes hold their current directory).
+    pub async fn shutdown(&mut self) -> Result<(), String> {
+        for (_, job) in std::mem::take(&mut self.jobs) {
+            job.kill().await?;
+        }
+        if let Some(session) = self.shell_session.take() {
+            session.close().await;
+        }
+        Ok(())
+    }
+
+    /// Create a tool executor with an explicitly validated native shell selection.
+    pub fn with_shell(permissions: Engine, selection: &str) -> Result<Self, String> {
+        crate::platform::detect_shell(selection)?;
+        let mut tools = Self::new(permissions);
+        tools.shell_selection = selection.into();
+        Ok(tools)
+    }
+
+    /// Active interpreter information for system prompts and tool descriptions.
+    pub fn shell(&self) -> Result<crate::platform::Shell, String> {
+        crate::platform::detect_shell(&self.shell_selection)
     }
 
     /// Stable tool schemas used by all provider adapters.
@@ -108,7 +135,8 @@ impl Tools {
         if let Some(session) = &self.shell_session {
             return Ok(session.clone());
         }
-        let session = shell::Session::new(&self.permissions, &self.permissions.root)?;
+        let home = crate::platform::home_dir().unwrap_or_else(|| self.permissions.root.clone());
+        let session = shell::Session::with_shell(&self.permissions, &home, &self.shell_selection)?;
         self.shell_session = Some(session.clone());
         Ok(session)
     }
@@ -263,7 +291,12 @@ impl Tools {
                 let command = required(input, "command")?;
                 let mut shell_permissions = self.permissions.clone();
                 if approved {
-                    if shell::permission_decision(&shell_permissions, command)? == Decision::Deny {
+                    if shell::permission_decision_for(
+                        &shell_permissions,
+                        command,
+                        self.shell()?.kind,
+                    )? == Decision::Deny
+                    {
                         return Err("permission denied by policy".into());
                     }
                     // Approval applies only to this invocation; deny and plan restrictions remain.
@@ -277,8 +310,13 @@ impl Tools {
                     .map(Duration::from_secs)
                     .unwrap_or(Duration::MAX);
                 if input["run_in_background"].as_bool().unwrap_or(false) {
-                    let bg_session =
-                        shell::Session::new(&self.permissions, &self.permissions.root)?;
+                    let home = crate::platform::home_dir()
+                        .unwrap_or_else(|| self.permissions.root.clone());
+                    let bg_session = shell::Session::with_shell(
+                        &self.permissions,
+                        &home,
+                        &self.shell_selection,
+                    )?;
                     let job = bg_session
                         .background(&shell_permissions, command, timeout)
                         .await?;
@@ -390,8 +428,12 @@ impl Tools {
                 let path = self
                     .permissions
                     .existing(Path::new(required(input, "path")?))?;
+                let root = self
+                    .permissions
+                    .workspace_for(&path)
+                    .ok_or("invalid read boundary")?;
                 let relative = path
-                    .strip_prefix(&self.permissions.root)
+                    .strip_prefix(root)
                     .map_err(|_| "invalid read boundary")?;
                 for resource in [path.to_string_lossy(), relative.to_string_lossy()] {
                     if self.permissions.decide("Read", &resource, false) != Decision::Allow {
@@ -536,6 +578,11 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
         if glob.as_ref().is_some_and(|g| !g.is_match(relative)) {
             continue;
         }
+        // Search results use a stable slash-separated display on every platform.
+        // Keep native paths for filesystem access, matching and permissions above.
+        let display_path = relative.to_string_lossy();
+        #[cfg(windows)]
+        let display_path = display_path.replace('\\', "/");
         if let Some(regex) = &regex {
             if entry
                 .metadata()
@@ -554,7 +601,7 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
                     if regex.is_match(line) {
                         output.push(format!(
                             "{}:{}:{}",
-                            relative.display(),
+                            display_path,
                             index + 1,
                             line.chars().take(2000).collect::<String>()
                         ));
@@ -565,7 +612,7 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
                 }
             }
         } else {
-            output.push(relative.display().to_string());
+            output.push(display_path.to_string());
         }
         if output.len() >= limit {
             break;

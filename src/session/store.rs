@@ -316,6 +316,9 @@ impl SessionStore {
             file.lock()?;
             file.write_all(&bytes)?;
             file.sync_all()?;
+            // Ordinary directory handles cannot be opened/synced on Windows.
+            // The regular session file is still synchronously committed above.
+            #[cfg(unix)]
             File::open(&self.directory)?.sync_all()?;
             return Ok(Session {
                 id,
@@ -470,6 +473,17 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 pub(crate) fn reject_symlinks(path: &Path) -> io::Result<()> {
+    // Verbatim Windows paths treat '/' as an ordinary character rather than a
+    // separator. Reject both spellings before component parsing so model-supplied
+    // mixed slashes cannot disguise parent traversal at this boundary.
+    #[cfg(windows)]
+    if path
+        .to_string_lossy()
+        .split(['/', '\\'])
+        .any(|part| part == "..")
+    {
+        return Err(invalid("parent traversal is not allowed"));
+    }
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -481,6 +495,11 @@ pub(crate) fn reject_symlinks(path: &Path) -> io::Result<()> {
             return Err(invalid("parent traversal is not allowed"));
         }
         current.push(component);
+        // A Windows drive/UNC prefix is not a filesystem entry until RootDir
+        // completes it; probing a bare verbatim prefix fails with ERROR_INVALID_FUNCTION.
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(invalid("symlinks are not allowed"))
@@ -495,12 +514,14 @@ pub(crate) fn reject_symlinks(path: &Path) -> io::Result<()> {
 
 fn private_directory(path: &Path) -> io::Result<()> {
     reject_symlinks(path)?;
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
         builder.mode(0o700);
-    }
+        builder
+    };
     match builder.create(path) {
         Ok(()) => (),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),

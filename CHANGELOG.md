@@ -2,6 +2,21 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - Unreleased
+
+### Fixed
+
+- Hardened project configuration, command completion, session recovery and interactive approvals.
+
+## [0.3.0] - Unreleased
+
+### Added
+
+- Native Windows platform boundaries, shell selection, process-tree Job Objects, native home paths and credential ACL hardening.
+- Checksum-verified per-user installers, bounded self-update and source revision in version output.
+- Three-platform CI and native installer smoke workflows; Windows availability remains pending their successful execution.
+- Distribution assembly and static-hosting deployment instructions. The custom-domain installer endpoint is not enabled yet.
+
 ## [0.2.2] - 2026-11-12
 
 ### Fixed

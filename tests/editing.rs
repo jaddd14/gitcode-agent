@@ -1,14 +1,9 @@
 //! Editing acceptance tests; path import works before the tool dispatcher export.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "../src/tools/editing.rs"]
-mod editing;
-mod perm {
-    pub use gitcode::perm::*;
-}
-
 use editing::{execute, ReadState};
 use gitcode::perm::{Engine, Mode, Rule};
+use gitcode::tools::editing;
 use serde_json::{json, Value};
 use std::{
     fs,

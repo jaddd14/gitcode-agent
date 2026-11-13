@@ -12,7 +12,7 @@ mod store;
 use gitcode::provider::canonical::{Content, Message, Role};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use store::{SessionStore, MAX_SESSION_BYTES};
 
@@ -56,6 +56,38 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.base);
     }
+}
+
+#[test]
+fn canonical_storage_paths_are_checked_after_the_root_is_complete() {
+    let f = Fixture::new();
+    let home = fs::canonicalize(&f.home).unwrap();
+    let project = fs::canonicalize(&f.project).unwrap();
+    #[cfg(windows)]
+    assert!(matches!(
+        home.components().next(),
+        Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+    ));
+    store::reject_symlinks(&home).unwrap();
+    store::reject_symlinks(&project).unwrap();
+    // PathBuf::join normalizes parent components on Windows verbatim paths.
+    // Preserve the actual untrusted spelling to exercise traversal rejection.
+    let mut traversal = home.as_os_str().to_os_string();
+    #[cfg(windows)]
+    traversal.push(r"\..\outside");
+    #[cfg(not(windows))]
+    traversal.push("/../outside");
+    assert!(store::reject_symlinks(Path::new(&traversal)).is_err());
+    let mut mixed_traversal = home.as_os_str().to_os_string();
+    mixed_traversal.push("/../outside");
+    assert!(store::reject_symlinks(Path::new(&mixed_traversal)).is_err());
+    let store = SessionStore::open(&home, &project).unwrap();
+    let session = store.create("Canonical storage", None).unwrap();
+    store
+        .append(&session.id, &Message::text(Role::User, "saved"))
+        .unwrap();
+    assert_eq!(store.resume(&session.id).unwrap().messages.len(), 1);
 }
 
 #[test]
@@ -332,6 +364,30 @@ fn memory_hierarchy_fallback_imports_and_override_order() {
         "global\nroot\nimported\nafter\nsource\nleaf\nimported\n"
     );
     assert_eq!(loaded.sources.len(), 6);
+}
+
+#[test]
+fn memory_loads_canonical_unicode_paths_and_confined_imports() {
+    let f = Fixture::new();
+    let home = f.home.canonicalize().unwrap();
+    let project = f.project.canonicalize().unwrap();
+    let cwd = project.join("nested space-данные");
+    fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.canonicalize().unwrap();
+    #[cfg(windows)]
+    assert!(matches!(
+        cwd.components().next(),
+        Some(std::path::Component::Prefix(prefix)) if prefix.kind().is_verbatim()
+    ));
+    fs::write(home.join("GITCODE.md"), "home\n").unwrap();
+    fs::write(project.join("GITCODE.md"), "project\n").unwrap();
+    fs::write(cwd.join("GITCODE.md"), "nested\n@../rules.md\n").unwrap();
+    fs::write(project.join("rules.md"), "confined import\n").unwrap();
+    let loaded = memory::load(&home, &project, &cwd).unwrap();
+    assert_eq!(loaded.text, "home\nproject\nnested\nconfined import\n");
+    assert_eq!(loaded.sources.len(), 4);
+    fs::write(cwd.join("GITCODE.md"), "@../../outside.md\n").unwrap();
+    assert!(memory::load(&home, &project, &cwd).is_err());
 }
 
 #[test]

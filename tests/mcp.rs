@@ -51,8 +51,12 @@ async fn stdio_and_http_sse_mcp_clients_execute_tools() {
         "printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2024-11-05\"}}\\n'; ",
         "printf '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"stdio-ok\"}]}}\\n'"
     );
+    #[cfg(windows)]
+    let executable = gitcode::platform::detect_shell("bash").unwrap().executable;
+    #[cfg(not(windows))]
+    let executable = std::path::PathBuf::from("/bin/sh");
     let stdio = StdioMcpClient::new(
-        "/bin/sh",
+        executable.to_str().unwrap(),
         vec!["-c".into(), script.into()],
         BTreeMap::new(),
         Duration::from_secs(5),

@@ -51,11 +51,18 @@ impl Fixture {
     }
 
     fn git(&self, args: &[&str]) -> Vec<u8> {
-        let output = Command::new("git")
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap())
+        let mut command = Command::new("git");
+        command.env_clear();
+        for name in ["PATH", "SystemRoot", "COMSPEC"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let output = command
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", null)
+            .env("GIT_CONFIG_GLOBAL", null)
             .args([
                 "-c",
                 "user.name=Checkpoint test",
@@ -126,6 +133,34 @@ async fn snapshots_are_independent_selected_only_and_reopenable() {
     assert!(!f.storage.join("shadow.git/refs/heads/master").exists());
 }
 
+#[tokio::test]
+async fn canonical_storage_with_spaces_and_unicode_round_trips_binary_files() {
+    let f = Fixture::new();
+    let storage = f.base.join("checkpoint store Юникод");
+    std::fs::create_dir(&storage).unwrap();
+    let storage = std::fs::canonicalize(storage).unwrap();
+    #[cfg(windows)]
+    assert!(matches!(
+        storage.components().next(),
+        Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+    ));
+    let cp = Checkpoints::open(&f.root, &storage).await.unwrap();
+    f.write("nested/file", b"saved\r\n\0\xff");
+    let selected = paths(&["nested/file", "absent"]);
+    let id = cp.snapshot(&selected).await.unwrap();
+    f.write("nested/file", b"changed");
+    f.write("absent", b"created");
+    let reopened = Checkpoints::open(&f.root, &storage).await.unwrap();
+    reopened.restore(&id, &selected).await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("nested/file")).unwrap(),
+        b"saved\r\n\0\xff"
+    );
+    assert!(!f.root.join("absent").exists());
+    assert!(!storage.join("shadow.git/index").exists());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn workspace_alias_accepts_absolute_paths_but_not_symlink_files() {
@@ -184,6 +219,27 @@ async fn never_changes_user_index_history_or_unselected_files() {
 }
 
 #[tokio::test]
+async fn pathspec_metacharacters_are_literal_on_every_platform() {
+    let f = Fixture::new();
+    let cp = f.open().await;
+    f.write("[literal]", b"selected");
+    f.write("l", b"unselected");
+    let selected = paths(&["[literal]"]);
+    let id = cp.snapshot(&selected).await.unwrap();
+    f.write("[literal]", b"changed");
+    f.write("l", b"must stay changed");
+    cp.restore(&id, &selected).await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("[literal]")).unwrap(),
+        b"selected"
+    );
+    assert_eq!(
+        std::fs::read(f.root.join("l")).unwrap(),
+        b"must stay changed"
+    );
+}
+
+#[tokio::test]
 async fn invalid_paths_and_selections_are_rejected_before_changes() {
     let f = Fixture::new();
     let cp = f.open().await;
@@ -206,8 +262,9 @@ async fn invalid_paths_and_selections_are_rejected_before_changes() {
         ":(glob)*",
         "/outside",
     ] {
-        if bad == ":(glob)*" {
-            // Literal pathspec-like filenames are supported, never interpreted by Git.
+        if bad == ":(glob)*" && cfg!(unix) {
+            // Unix permits these bytes; Windows must reject the invalid filename.
+            // Literal pathspec-like filenames are never interpreted by Git.
             let literal = cp.snapshot(&paths(&[bad])).await.unwrap();
             cp.restore(&literal, &paths(&[bad])).await.unwrap();
             continue;

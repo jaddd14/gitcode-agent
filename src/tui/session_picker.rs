@@ -54,6 +54,7 @@ fn filtered(sessions: &[SessionSummary], query: &str) -> Vec<usize> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rows(
     sessions: &[SessionSummary],
     results: &[usize],

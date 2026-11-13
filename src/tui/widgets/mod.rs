@@ -365,7 +365,7 @@ pub fn style_frame_row_with_panel(
                 styled.push_str(&panel_background);
                 styled.push_str(&row_text);
             } else if index == inner_end {
-                styled.push_str(&reset);
+                styled.push_str(reset);
                 styled.push_str(&row_text);
             }
         }
@@ -399,11 +399,7 @@ pub fn style_frame_row_with_panel(
             styled.push_str(&foreground(Rgb(244, 181, 44), mode));
             styled.push(ch);
             styled.push_str(&row_text);
-        } else if header_row && ch == '▏' {
-            styled.push_str(&rose);
-            styled.push(ch);
-            styled.push_str(&row_text);
-        } else if header_row && index == 0 && matches!(ch, '│' | '|') {
+        } else if header_row && (ch == '▏' || index == 0 && matches!(ch, '│' | '|')) {
             styled.push_str(&rose);
             styled.push(ch);
             styled.push_str(&row_text);

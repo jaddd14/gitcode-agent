@@ -3,6 +3,7 @@
 <img src="assets/banner.png" alt="gitcode — A terminal coding agent written in Rust" width="100%" />
 
 [![Rust](https://img.shields.io/badge/rust-1.99-D6336C?style=flat&labelColor=1C1128)](Cargo.toml)
+[![Platforms](https://img.shields.io/badge/platforms-Linux_%7C_macOS_%7C_Windows-7A3FB5?style=flat&labelColor=1C1128)](docs/windows.md)
 [![Status](https://img.shields.io/badge/status-in_development-7A3FB5?style=flat&labelColor=1C1128)](docs/dev/COMPLIANCE-AUDIT.md)
 [![License](https://img.shields.io/badge/license-MIT-7BD389?style=flat&labelColor=1C1128)](LICENSE)
 
@@ -26,9 +27,9 @@ A local-first terminal coding agent under development in a single Rust Cargo pac
 | Workspace tools | Read, LS, Glob, Grep, Write, Edit, MultiEdit, NotebookEdit, apply_patch | Text-oriented reads; no complete image/PDF tool path |
 | Editing | Read-before-write tracking and per-file atomic replacement | Multi-file changes are not crash-atomic; checkpoints/diffs are not integrated automatically |
 | Shell | Persistent non-interactive sessions and background-job helpers | No OS-level sandbox; complex syntax is checked as a whole |
-| Terminal | Borderless startup mark and build highlights, framed prompt, immediate slash popup, tabbed usage, model picker, live retry/tool progress, Unicode editor and streaming Markdown | Advanced completion, persistent history and permission approval remain incomplete |
+| Terminal | Borderless startup mark and build highlights, framed prompt, immediate slash popup, tabbed usage, model picker, live retry/tool progress, Unicode editor and streaming Markdown | Advanced completion and persistent history remain incomplete |
 | Headless | `-p`, `exec`, bounded stdin, text/JSON and live stream-JSON output, doctor and completions | Stream input accepts text/message.content strings; full flags/tool-event parity remains incomplete |
-| Sessions and usage | Completed CLI/TUI turns persist, `--resume`/`--continue`, project memory, per-request usage ledger | Failed/interrupted turns are not committed; prices remain unknown and USD budgets fail closed |
+| Sessions and usage | Completed CLI/TUI turns persist, `--resume`/`--continue`, project memory, per-request usage ledger | Abrupt process termination can lose in-flight work; prices remain unknown and USD budgets fail closed |
 | Other modules | Checkpoints, agency, commands, hooks, skills, MCP and web helpers | Module presence does not mean these are available in the interactive application |
 
 ## What it looks like
@@ -36,6 +37,24 @@ A local-first terminal coding agent under development in a single Rust Cargo pac
 <img src="assets/preview.svg" alt="Illustration of the planned terminal interface; not a screenshot" width="100%" />
 
 *Design illustration, not a captured application screenshot. Some illustrated functionality remains unintegrated.*
+
+## Windows port and installers
+
+Native Linux, macOS and Windows test matrices and installer smoke jobs passed [CI 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`; [Security](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738949) passed too. Release publication is still pending. Native GUI clipboard/toast display is not validated by those headless jobs. See [Windows requirements and limitations](docs/windows.md) and [static installer deployment](docs/dev/DEPLOY-INSTALLER.md).
+
+The custom-domain installer endpoint is not live (manifest check returned HTTP 404). Once a release containing these scripts is verified and merged, the GitHub-hosted installation paths are:
+
+```bash
+export GITCODE_BASE_URL=https://github.com/jaddd14/gitcode-agent/releases/latest/download
+curl -fsSL https://raw.githubusercontent.com/jaddd14/gitcode-agent/main/scripts/install.sh | bash
+```
+
+```powershell
+$env:GITCODE_BASE_URL = 'https://github.com/jaddd14/gitcode-agent/releases/latest/download'
+irm https://raw.githubusercontent.com/jaddd14/gitcode-agent/main/scripts/install.ps1 | iex
+```
+
+These are pending publication, not currently verified installation commands. Installers use SHA256 verification and require no administrator rights. A verified installation can later be updated with `gitcode update`.
 
 ## Run from source
 
@@ -71,11 +90,11 @@ The executable currently accepts explicit endpoint/protocol overrides. Set an AP
 
 Credential environment-variable selection follows the configured `provider.api_key_env`; changing a wire protocol alone does not change that variable. Configure it explicitly for non-Anthropic endpoints.
 
-The `src/provider/registry.rs` preset list and quirk transformer are library components; a complete live-selectable provider/model registry is not yet available. Do not assume `--provider` selects a preset until its runtime integration is verified.
+`--provider` selects a preset from `src/provider/registry.rs`. Explicit endpoint and protocol flags can override the selected preset. A complete live-selectable provider/model registry is not yet available.
 
 ## Safety and limitations
 
-- Interactive Bash requests can be approved once, rejected, or approved for single commands sharing the displayed executable and first argument until the conversation changes. Explicit ask rules still prompt and deny rules still apply. Other operations requiring approval and noninteractive requests fail closed.
+- Interactive Bash requests can be approved once, rejected, or approved for single commands sharing the displayed executable and first argument until the conversation changes. Interactive file edits, web fetches and MCP calls can also be approved once. Explicit deny rules still apply; noninteractive requests requiring approval fail closed.
 - `--dangerously-skip-permissions` enables bypass behavior; explicit denial rules and parser restrictions still apply. This flag is not filesystem isolation.
 - Native file tools check workspace boundaries. Arbitrary shell commands are **not confined by an OS sandbox**.
 - File and web content must be treated as untrusted input. This does not eliminate prompt-injection risk.

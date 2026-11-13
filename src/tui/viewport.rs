@@ -333,19 +333,16 @@ fn selected_rows(
 fn slice_cells(text: &str, from: usize, to: usize) -> String {
     let mut pos = 0;
     text.graphemes(true)
-        .filter_map(|g| {
+        .filter(|g| {
             let start = pos;
-            pos += UnicodeWidthStr::width(g);
-            if pos > from && start < to {
-                Some(g)
-            } else {
-                None
-            }
+            pos += UnicodeWidthStr::width(*g);
+            pos > from && start < to
         })
         .collect()
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crossterm::event::{KeyModifiers, MouseEvent};

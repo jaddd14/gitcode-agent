@@ -146,3 +146,35 @@ async fn approved_edit_never_overrides_explicit_deny_or_plan_mode() {
     assert!(!root.join("blocked.txt").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn explicitly_added_directory_supports_read_and_edit_without_opening_siblings() {
+    let base = std::env::temp_dir().join(format!("gitcode-extra-root-{}", std::process::id()));
+    let root = base.join("project");
+    let extra = base.join("extra");
+    let sibling = base.join("unapproved");
+    for path in [&root, &extra, &sibling] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let target = extra.join("file.txt");
+    std::fs::write(&target, "before").unwrap();
+    std::fs::write(sibling.join("secret.txt"), "secret").unwrap();
+    let mut engine = Engine::new(&root, Mode::AcceptEdits).unwrap();
+    assert!(engine.existing(&target).is_err());
+    engine.add_workspace(&extra).unwrap();
+    assert!(engine.existing(&sibling.join("secret.txt")).is_err());
+    let mut tools = Tools::new(engine);
+    tools
+        .execute("Read", &json!({"path":target}))
+        .await
+        .unwrap();
+    tools
+        .execute(
+            "Edit",
+            &json!({"path":target,"old_string":"before","new_string":"after"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "after");
+    std::fs::remove_dir_all(base).unwrap();
+}

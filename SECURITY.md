@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-Only the latest `0.1.x` release series receives security updates and vulnerability fixes.
+Only the latest `0.3.x` release series receives security updates and vulnerability fixes.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.1.x   | Yes       |
-| < 0.1.0 | No        |
+| 0.3.x   | Yes       |
+| < 0.3.0 | No        |
 
 ## Reporting a Vulnerability
 

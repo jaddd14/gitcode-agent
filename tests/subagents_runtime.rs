@@ -1,4 +1,5 @@
 //! Exercise real parent/child model loops with a local scripted provider.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use gitcode::{
     agent::{Agent, BASE_PROMPT},
     perm::{Engine, Mode},

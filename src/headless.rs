@@ -215,21 +215,65 @@ pub struct DoctorReport {
 
 /// Run diagnostic checks on git availability, workspace directory, config, and API key presence.
 pub fn run_doctor(workspace: &Path, config_valid: bool, has_api_key: bool) -> DoctorReport {
+    let env = std::env::vars().collect::<std::collections::BTreeMap<_, _>>();
+    let selection = if let Some(home) = crate::platform::home_dir_from(&env) {
+        crate::config::load(&home, workspace, &env, &crate::config::Overrides::new())
+            .map(|config| config.shell)
+            .map_err(|_| "cannot resolve shell: configuration validation failed")
+    } else {
+        Ok(env
+            .get("GITCODE_SHELL")
+            .cloned()
+            .unwrap_or_else(|| "auto".into()))
+    };
+    let config_valid = config_valid && selection.is_ok();
+    let shell = match selection {
+        Ok(selection) => match crate::shell::Shell::detect(&selection) {
+            Ok(shell) if shell.executable.is_file() => DoctorCheck {
+                name: "shell".into(),
+                ok: true,
+                detail: format!(
+                    "selected shell: {} (selection: {selection}); executable: {}",
+                    shell.name(),
+                    shell.executable.display()
+                ),
+            },
+            _ => DoctorCheck {
+                name: "shell".into(),
+                ok: false,
+                detail: "selected shell unavailable; install it or set config.shell to auto".into(),
+            },
+        },
+        Err(detail) => DoctorCheck {
+            name: "shell".into(),
+            ok: false,
+            detail: detail.into(),
+        },
+    };
     let git_ok = std::process::Command::new("git")
+        .stdin(std::process::Stdio::null())
         .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     let ws_ok = workspace.is_dir();
 
-    let checks = vec![
+    #[allow(unused_mut)]
+    let mut checks = vec![
+        shell,
         DoctorCheck {
             name: "git".into(),
             ok: git_ok,
             detail: if git_ok {
-                "git binary available".into()
+                if cfg!(windows) {
+                    "Git available; Git for Windows is required for native Windows use".into()
+                } else {
+                    "git binary available".into()
+                }
+            } else if cfg!(windows) {
+                "Git for Windows unavailable; install with: winget install --id Git.Git -e".into()
             } else {
-                "git binary not found in PATH".into()
+                "git binary not found in PATH or failed to run; install Git".into()
             },
         },
         DoctorCheck {
@@ -260,6 +304,24 @@ pub fn run_doctor(workspace: &Path, config_valid: bool, has_api_key: bool) -> Do
             },
         },
     ];
+    #[cfg(windows)]
+    {
+        checks.push(DoctorCheck {
+            name: "sandbox".into(),
+            ok: true,
+            detail: "Windows sandbox: enforced at tool level, not OS level; tool path boundaries and command classification do not isolate arbitrary shell commands".into(),
+        });
+        let windows_terminal = env.get("WT_SESSION").is_some_and(|value| !value.is_empty());
+        checks.push(DoctorCheck {
+            name: "terminal".into(),
+            ok: true,
+            detail: if windows_terminal {
+                "Windows Terminal detected".into()
+            } else {
+                "WARNING: Windows Terminal not detected; legacy console or another host may have limited keyboard and rendering support. Prefer Windows Terminal; use Alt+Enter, Ctrl+J, or a trailing backslash for newlines".into()
+            },
+        });
+    }
     let healthy = checks.iter().all(|c| c.ok);
     DoctorReport { healthy, checks }
 }

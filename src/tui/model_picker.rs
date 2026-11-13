@@ -20,6 +20,7 @@ fn filter(models: &[String], query: &str) -> Vec<usize> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rows(
     models: &[String],
     results: &[usize],

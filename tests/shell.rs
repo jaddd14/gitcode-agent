@@ -2,14 +2,8 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used)]
 
-#[path = "../src/tools/shell.rs"]
-mod shell;
-// The standalone source expects the same crate-relative permission module as the library.
-mod perm {
-    pub use gitcode::perm::*;
-}
-
-use perm::{Engine, Mode, Rule};
+use gitcode::perm::{Engine, Mode, Rule};
+use gitcode::tools::shell;
 use shell::{Session, OUTPUT_LIMIT};
 use std::{
     path::PathBuf,

@@ -136,6 +136,8 @@ fn boolean(input: &Value, key: &str) -> Result<bool, String> {
 
 fn resolve(engine: &Engine, tool: &str, raw: &str) -> Result<PathBuf, String> {
     let requested = Path::new(raw);
+    #[cfg(windows)]
+    crate::platform::validate_windows_path(requested)?;
     if raw.is_empty()
         || requested
             .components()
@@ -173,11 +175,14 @@ fn resolve(engine: &Engine, tool: &str, raw: &str) -> Result<PathBuf, String> {
     for part in missing.into_iter().rev() {
         path.push(part);
     }
-    if !path.starts_with(&engine.root) || path == engine.root {
+    let Some(workspace) = engine.workspace_for(&path) else {
+        return Err("path is outside workspace or is workspace root".into());
+    };
+    if path == workspace {
         return Err("path is outside workspace or is workspace root".into());
     }
     let relative = path
-        .strip_prefix(&engine.root)
+        .strip_prefix(workspace)
         .map_err(|_| "invalid workspace path")?
         .to_string_lossy();
     // Check both spellings: absolute callers must not bypass relative deny rules.

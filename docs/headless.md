@@ -9,4 +9,4 @@ Live stream-JSON contains `init`, `message_delta`, `thinking_delta`, and final `
 
 Stdin is bounded to 8 MiB. Stream-JSON input accepts lines with string `text` or string `message.content`; arbitrary content-block arrays are unsupported. Tool/error event parity and some CLI options remain [known gaps](dev/PROGRESS.md#known-gaps).
 
-Completed turns persist and can be resumed with `--resume <id>` or `--continue`. Failed/interrupted turns are not durably committed. See [usage](usage-and-cost.md).
+Completed turns persist and can be resumed with `--resume <id>` or `--continue`. On a reported failure, completed tool results are checkpointed so the session can be resumed; abrupt process termination can still lose in-flight work. See [usage](usage-and-cost.md).

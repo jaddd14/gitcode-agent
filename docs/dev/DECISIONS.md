@@ -1,5 +1,26 @@
 # Decisions
 
+- 2026-11-09: The PowerShell stdin wrapper transports the complete UTF-8 user script and status capture as base64 on a single physical line. This preserves multiline commands, trailing comments and non-ASCII literals without letting stdin's interactive parser buffer an unfinished multiline quote. Base64 is transport encoding, not a trust or sandbox boundary.
+
+- 2026-11-09: Capture PowerShell `$?` inside the user's dynamically compiled script, immediately after its final statement, not after dot-source invocation. Preserve PowerShell final-command/pipeline semantics rather than converting all nonterminating errors to terminating errors; reset LASTEXITCODE per request and retain exact failing native exit codes. Append capture on a fresh line to survive trailing comments; drain formatting before completion framing. Native tests cover both installed PowerShell families, timeout and background cancellation recovery.
+
+- 2026-11-09: Persistent PowerShell commands drain object formatting through `Out-Default` before emitting raw completion framing. Status is captured inside the dot-sourced command block before formatting, preserving cwd/environment and nonzero outcomes. Native CI must verify both Windows PowerShell and pwsh; string-shape tests alone are not runtime evidence.
+
+- 2026-11-09: Hooks preserve their existing POSIX command dialect on Windows by resolving native Git Bash, not translating configured scripts into PowerShell/cmd or assuming `/bin/sh` exists. A missing Git Bash produces the existing non-blocking hook diagnostic. Native MCP stdio fixtures resolve the same interpreter while retaining all protocol assertions.
+
+- 2026-11-09: Session creation always syncs the regular session file; directory fsync is Unix-only because ordinary Windows directory opens fail with access denied. Memory ancestor validation now skips only incomplete Windows prefix components, matching session storage, and still validates completed roots and every descendant. Native Windows CI remains required.
+- 2026-11-09: Optional terminal extensions use a conservative known-host/platform policy rather than blocking startup probes. Unknown hosts run without synchronized-output/Kitty extensions; graphics remain unsupported. Clipboard access is explicit-user-action only, never startup or background polling; transcript text is passed as stdin data to a fixed native script, not interpolated into shell code.
+
+- 2026-11-09: Session-storage ancestor validation accumulates Windows Prefix components without probing them as files, then validates the complete root and all descendants. Bare verbatim drive/UNC prefixes are not filesystem entries; this preserves per-component symlink and parent-traversal rejection.
+
+- 2026-11-08: Checkpoint literal-pathspec tests respect native filename rules: Unix accepts `:(glob)*` literally, while Windows must reject it without mutation. Shared `[literal]` versus `l` round-trip coverage verifies that glob metacharacters are never interpreted on either platform.
+
+- 2026-11-08: Shadow Git commands use `--git-dir .` inside the validated canonical shadow-store cwd. This avoids passing Rust's Windows verbatim (`\\?\`) paths through Git's argument parser without stripping prefixes, relaxing storage validation, or inheriting user Git configuration. Native Windows CI must verify this repair.
+
+- 2026-11-08: M19 preserves the complete worktree in an external source archive before moving the uncommitted Windows delta onto the current main commit. The main worktree and stable binary remain unchanged. Native three-platform CI is mandatory before merge; missing local MinGW is not Windows compilation evidence.
+- 2026-11-08: The updater owns the sole install-origin source constant. Installer rendering reads it; generated installer copies are not independent configuration sources. The custom domain returned 404, so deployment documentation labels it to be enabled.
+- 2026-11-08: Canonicalize temporary test roots before strict session-store checks. macOS system temporary-directory symlinks must not weaken production symlink rejection. Windows subprocess tests isolate both HOME and USERPROFILE.
+
 - 2026-11-07: Add crossterm event streams for terminal input, unicode-segmentation/width for grapheme-safe editing, signal-hook for termination cleanup, ignore/regex/globset for native workspace search, and clap for typed CLI parsing. No terminal mouse capture or alternate screen is enabled.
 - 2026-11-07: Until an explicit approval UI exists, permission decisions of Ask return an error rather than granting access. Editing runs on blocking workers, serially; individual renames are atomic, multi-file transactions use best-effort rollback and are not crash-atomic.
 - 2026-11-07: Unsupported terminal actions are reported explicitly rather than simulated. Full parity remains an acceptance target, not a current product claim.

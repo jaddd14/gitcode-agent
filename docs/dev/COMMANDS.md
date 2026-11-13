@@ -31,10 +31,10 @@ The dispatcher renders bounded cards, not interactive pickers unless noted below
 | `/theme` | None | Current palette and compatibility reference; no theme switching. |
 | `/vim` | None | Explicitly reports that Vim mode is unavailable; shows actual editor shortcuts. |
 | `/export` | `[relative-path.json]` | Serializes messages through shared Write permission/path/read guards. Without path shows usage. Ask is not auto-approved. |
-| `/copy` | None | Explicitly reports clipboard unavailable, shows last assistant text size/preview and `/export` alternative. No clipboard write and no success toast. |
+| `/copy` | None | On an interactive Windows terminal, copies the last assistant text through a fixed PowerShell clipboard script with UTF-8 stdin and a five-second timeout. Success toast follows only a successful native exit. Redirected/non-Windows/unavailable clipboards retain an honest failure card and `/export` alternative. |
 | `/hooks` | None | Supported-event reference, not a configured-hook viewer/editor. |
 | `/skills` | None | Discovery list, not a detail/execute picker. |
-| `/add-dir` | `[path]` | Validates a directory inside the existing workspace; does not add access roots. |
+| `/add-dir` | `[path]` | Add an explicitly authorized workspace directory for the current session. |
 | `/login` | None | Credential setup reference; does not accept/store keys or perform authentication. |
 | `/logout` | None | Credential-file presence and cleanup instructions; does not delete keys or unset environment variables. |
 | `/terminal-setup` | None | Shortcut reference; does not modify terminal configuration. |
