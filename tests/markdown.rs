@@ -133,18 +133,46 @@ fn tables_reclassify_headers_wrap_cells_and_keep_following_prose() {
     assert_eq!(parser.lines()[2].kind, Kind::TableRow);
     assert_eq!(parser.lines()[3].kind, Kind::Paragraph);
     let rows = plain(&parser, 15);
-    assert_eq!(rows[0], "Name  │ Value  ");
-    assert_eq!(rows[1], "──────┼────────");
-    assert_eq!(rows[2], "alpha │ 世界世 ");
-    assert_eq!(rows[3], "      │ 界     ");
-    assert_eq!(rows[4], "──────┴────────");
-    assert_eq!(rows[5], "after");
+    assert_eq!(
+        rows,
+        [
+            "┌──────┬──────┐",
+            "│ Name │ Valu │",
+            "│      │ e    │",
+            "├──────┼──────┤",
+            "│ alph │ 世界 │",
+            "│ a    │ 世界 │",
+            "└──────┴──────┘",
+            "after",
+        ]
+    );
     let parser = parse("| `a|b` | c\\|d |\n| --- | --- |\n| z | y |");
     assert_eq!(parser.lines()[0].cells.len(), 2);
     assert_eq!(parser.lines()[0].cells[0][0].text, "a|b");
     assert_eq!(parser.lines()[0].cells[1][0].text, "c|d");
     let not_table = parse("a | b\n-- | ---\n");
     assert!(not_table.lines().iter().all(|l| l.kind == Kind::Paragraph));
+}
+
+#[test]
+fn tables_close_borders_with_no_body_and_when_columns_must_stack() {
+    let header = parse("| A | B |\n| --- | --- |\n");
+    assert_eq!(plain(&header, 30), ["┌───┬───┐", "│ A │ B │", "└───┴───┘"]);
+    let parser = parse("| A | B |\n| --- | --- |\n| 世界 | long |\n");
+    for width in 3..9 {
+        let rows = plain(&parser, width);
+        assert!(rows.first().unwrap().starts_with('┌'));
+        assert!(rows.last().unwrap().starts_with('└'));
+        assert!(rows
+            .iter()
+            .all(|row| UnicodeWidthStr::width(row.as_str()) <= width));
+        assert!(rows
+            .iter()
+            .all(|row| matches!(row.chars().next(), Some('┌' | '├' | '└' | '│'))));
+        assert!(rows
+            .iter()
+            .all(|row| matches!(row.chars().last(), Some('┐' | '┤' | '┘' | '│'))));
+    }
 }
 
 #[test]

@@ -815,25 +815,7 @@ fn render_lines(lines: &[Line], width: usize, theme: &Theme, mode: ColorMode) ->
                 end += 1;
             }
             let group = &lines[index..end];
-            let widths = table_widths(group, width);
-            for (row_index, item) in group.iter().enumerate() {
-                render_table(item, width, &widths, theme, mode, &mut out);
-                if item.kind == Kind::TableRow {
-                    let rule = Line {
-                        kind: Kind::TableRule,
-                        prefix: String::new(),
-                        spans: Vec::new(),
-                        cells: vec![vec![]; item.cells.len()],
-                    };
-                    let start = out.len();
-                    render_table(&rule, width, &widths, theme, mode, &mut out);
-                    if row_index + 1 == group.len() {
-                        for row in &mut out[start..] {
-                            *row = row.replace('┼', "┴");
-                        }
-                    }
-                }
-            }
+            render_table_group(group, width, theme, mode, &mut out);
             index = end;
             continue;
         }
@@ -899,7 +881,7 @@ fn table_widths(lines: &[Line], width: usize) -> Vec<usize> {
             widths[index] = widths[index].max(natural.min(60));
         }
     }
-    let budget = width.saturating_sub(columns.saturating_sub(1) * 3);
+    let budget = width.saturating_sub(columns.saturating_mul(3).saturating_add(1));
     while widths.iter().sum::<usize>() > budget {
         let Some((index, value)) = widths.iter().enumerate().max_by_key(|(_, value)| *value) else {
             break;
@@ -912,43 +894,90 @@ fn table_widths(lines: &[Line], width: usize) -> Vec<usize> {
     widths
 }
 
-fn render_table(
-    line: &Line,
+fn table_border(widths: &[usize], padding: usize, left: char, middle: char, right: char) -> String {
+    let sections = widths
+        .iter()
+        .map(|width| "─".repeat(width + padding * 2))
+        .collect::<Vec<_>>()
+        .join(&middle.to_string());
+    format!("{left}{sections}{right}")
+}
+
+fn render_table_group(
+    group: &[Line],
     width: usize,
-    widths: &[usize],
     theme: &Theme,
     mode: ColorMode,
     out: &mut Vec<String>,
 ) {
-    let columns = line.cells.len();
-    // Narrow terminals stack cells instead of overflowing with separators.
-    if columns.saturating_mul(4).saturating_sub(1) > width {
-        if line.kind == Kind::TableRule {
-            out.push(paint(&[span(&"─".repeat(width), Role::Muted)], theme, mode));
-            return;
-        }
-        for cell in &line.cells {
-            for row in wrap_spans(cell, width) {
-                out.push(paint(&row, theme, mode));
+    let rows: Vec<Line> = group
+        .iter()
+        .filter(|line| line.kind != Kind::TableRule)
+        .cloned()
+        .collect();
+    let columns = group.first().map_or(0, |line| line.cells.len());
+    if width < 3 {
+        for row in &rows {
+            for cell in &row.cells {
+                for wrapped in wrap_spans(cell, width) {
+                    out.push(paint(&wrapped, theme, mode));
+                }
             }
         }
         return;
     }
-    if line.kind == Kind::TableRule {
-        out.push(paint(
+
+    // Stack columns if the terminal cannot fit even one cell per column.
+    let stacked = columns.saturating_mul(4).saturating_add(1) > width;
+    let rows = if stacked {
+        rows.into_iter()
+            .flat_map(|row| {
+                row.cells.into_iter().map(move |cell| Line {
+                    kind: row.kind.clone(),
+                    prefix: String::new(),
+                    spans: Vec::new(),
+                    cells: vec![cell],
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        rows
+    };
+    let padding = usize::from(width >= 5);
+    let widths = if stacked {
+        vec![width - 2 - padding * 2]
+    } else {
+        table_widths(&rows, width)
+    };
+    let border = |left, middle, right| {
+        paint(
             &[span(
-                &widths
-                    .iter()
-                    .map(|w| "─".repeat(*w))
-                    .collect::<Vec<_>>()
-                    .join("─┼─"),
+                &table_border(&widths, padding, left, middle, right),
                 Role::Muted,
             )],
             theme,
             mode,
-        ));
-        return;
+        )
+    };
+    out.push(border('┌', '┬', '┐'));
+    for (index, row) in rows.iter().enumerate() {
+        render_table(row, &widths, padding, theme, mode, out);
+        if index + 1 == rows.len() {
+            out.push(border('└', '┴', '┘'));
+        } else {
+            out.push(border('├', '┼', '┤'));
+        }
     }
+}
+
+fn render_table(
+    line: &Line,
+    widths: &[usize],
+    padding: usize,
+    theme: &Theme,
+    mode: ColorMode,
+    out: &mut Vec<String>,
+) {
     let cells = line
         .cells
         .iter()
@@ -957,11 +986,9 @@ fn render_table(
         .collect::<Vec<_>>();
     let height = cells.iter().map(Vec::len).max().unwrap_or(1);
     for row in 0..height {
-        let mut spans = Vec::new();
+        let mut spans = vec![span("│", Role::Muted)];
         for (column, cell) in cells.iter().enumerate() {
-            if column > 0 {
-                spans.push(span(" │ ", Role::Muted));
-            }
+            spans.push(span(&" ".repeat(padding), Role::Text));
             let content = cell.get(row).cloned().unwrap_or_default();
             let used = content
                 .iter()
@@ -974,9 +1001,10 @@ fn render_table(
                 s
             }));
             spans.push(span(
-                &" ".repeat(widths[column].saturating_sub(used)),
+                &" ".repeat(widths[column].saturating_sub(used) + padding),
                 Role::Text,
             ));
+            spans.push(span("│", Role::Muted));
         }
         out.push(paint(&spans, theme, mode));
     }
