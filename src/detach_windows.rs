@@ -13,6 +13,19 @@ fn command(executable: &Path) -> Command {
     command
 }
 
+fn parse_psmux_version(text: &str) -> Option<semver::Version> {
+    text.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        (words.next()? == "psmux")
+            .then(|| {
+                words
+                    .next()
+                    .and_then(|version| semver::Version::parse(version).ok())
+            })
+            .flatten()
+    })
+}
+
 fn same_directory(left: &Path, right: &Path) -> bool {
     let normalized = |path: &Path| {
         fs::canonicalize(path)
@@ -116,11 +129,7 @@ pub fn launch(continue_session: bool) -> Result<bool, String> {
                 return None;
             }
             let text = String::from_utf8(output.stdout).ok()?;
-            let mut words = text.split_whitespace();
-            if words.next()? != "psmux" {
-                return None;
-            }
-            semver::Version::parse(words.next()?).ok()
+            parse_psmux_version(&text)
         });
     if !version.is_some_and(|version| version >= semver::Version::new(3, 4, 0)) {
         eprintln!("Для фоновой сессии нужна psmux версии 3.4.0 или новее.");
@@ -215,4 +224,23 @@ pub fn launch(continue_session: bool) -> Result<bool, String> {
         return Err(error);
     }
     attach(&multiplexer, &name, None, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_psmux_version;
+
+    #[test]
+    fn accepts_psmux_build_line_after_tmux_compatibility_banner() {
+        assert_eq!(
+            parse_psmux_version("tmux 3.4.0\npsmux 3.4.0 (unknown commit)\n"),
+            Some(semver::Version::new(3, 4, 0))
+        );
+        assert_eq!(
+            parse_psmux_version("psmux 3.3.7\n"),
+            Some(semver::Version::new(3, 3, 7))
+        );
+        assert_eq!(parse_psmux_version("tmux 3.4.0\n"), None);
+        assert_eq!(parse_psmux_version("psmux invalid\n"), None);
+    }
 }
