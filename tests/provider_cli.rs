@@ -61,7 +61,8 @@ fn provider_preset_selects_protocol_and_credential() {
         )
         .unwrap();
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_gitcode"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gitcode"));
+    command
         .args([
             "--provider",
             "openai",
@@ -77,9 +78,13 @@ fn provider_preset_selects_protocol_and_credential() {
         .env("USERPROFILE", &temp_path)
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("OPENAI_API_KEY", "fixture-openai-key")
-        .current_dir(&temp_path)
-        .output()
-        .unwrap();
+        .current_dir(&temp_path);
+    for key in ["SystemRoot", "COMSPEC"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let output = command.output().unwrap();
     assert!(
         output.status.success(),
         "{}",

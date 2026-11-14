@@ -17,10 +17,24 @@ fn failed_headless_turn_preserves_completed_tool_result() {
     let home = std::fs::canonicalize(base.join("home")).unwrap();
     let project = std::fs::canonicalize(base.join("project")).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
         for index in 0..2 {
-            let (mut socket, _) = listener.accept().unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            let (mut socket, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "provider request {index} was not received"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("provider listener failed: {error}"),
+                }
+            };
             socket
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
@@ -64,7 +78,8 @@ fn failed_headless_turn_preserves_completed_tool_result() {
             }
         }
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_gitcode"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gitcode"));
+    command
         .args([
             "--base-url",
             &format!("http://{address}"),
@@ -76,10 +91,15 @@ fn failed_headless_turn_preserves_completed_tool_result() {
         ])
         .env_clear()
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .current_dir(&project)
-        .output()
-        .unwrap();
+        .current_dir(&project);
+    for key in ["SystemRoot", "COMSPEC"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let output = command.output().unwrap();
     server.join().unwrap();
     assert!(!output.status.success());
     assert!(project.join("side-effect").exists());
