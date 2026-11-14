@@ -11,6 +11,7 @@ pub mod headless;
 pub mod i18n;
 pub mod logging;
 pub mod mcp;
+pub mod model_preferences;
 pub mod paths;
 pub mod perm;
 pub mod platform;

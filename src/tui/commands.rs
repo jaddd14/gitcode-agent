@@ -429,7 +429,7 @@ pub async fn execute_command(
                 );
             }
             body.push(
-                "Изменения действуют только в текущем процессе; файл конфигурации не сохраняется."
+                "Выбранная модель сохраняется для следующих запусков; остальные изменения действуют только в текущем процессе."
                     .into(),
             );
             let rows = vec![
@@ -667,7 +667,7 @@ pub async fn execute_command(
                 )));
             }
             let sessions = tokio::task::spawn_blocking(move || {
-                SessionStore::open(&home_clone, &root_clone).and_then(|s| s.list())
+                SessionStore::open(&home_clone, &root_clone).and_then(|s| s.list_nonempty())
             })
             .await
             .map_err(io::Error::other)?;

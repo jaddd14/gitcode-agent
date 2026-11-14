@@ -24,14 +24,20 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+fn save_selected_model(provider: &crate::config::Provider, model: &str, status: &mut Status) {
+    let result = crate::platform::home_dir()
+        .ok_or_else(|| io::Error::other("домашний каталог недоступен"))
+        .and_then(|home| crate::model_preferences::set(&home, provider, model));
+    if let Err(error) = result {
+        status.toast = Some(format!("Модель не сохранена: {error}"));
+    }
+}
+
 fn apply_model_effort(agent: &mut Agent, status: &mut Status) {
     let _ = agent.client.set_effort(Some("xhigh"));
-    if let Some(home) = std::env::var_os("HOME") {
-        if let Err(error) = crate::effort_preferences::apply(
-            &mut agent.client,
-            std::path::Path::new(&home),
-            &agent.model,
-        ) {
+    if let Some(home) = crate::platform::home_dir() {
+        if let Err(error) = crate::effort_preferences::apply(&mut agent.client, &home, &agent.model)
+        {
             status.toast = Some(format!("Не удалось загрузить effort: {error}"));
         }
     }
@@ -39,11 +45,11 @@ fn apply_model_effort(agent: &mut Agent, status: &mut Status) {
 }
 
 fn save_effort(agent: &Agent, status: &mut Status) {
-    let result = std::env::var_os("HOME")
-        .ok_or_else(|| io::Error::other("HOME не задан"))
+    let result = crate::platform::home_dir()
+        .ok_or_else(|| io::Error::other("домашний каталог недоступен"))
         .and_then(|home| {
             crate::effort_preferences::set(
-                std::path::Path::new(&home),
+                &home,
                 &agent.model,
                 agent.client.effort().unwrap_or("default"),
             )
@@ -170,6 +176,8 @@ pub struct Options<'a> {
     pub model: &'a str,
     /// Provider display name.
     pub provider: &'a str,
+    /// Provider configuration used to persist the selected model.
+    pub model_provider: &'a crate::config::Provider,
     /// Working directory display path.
     pub cwd: &'a str,
     /// Cached branch name, or an unknown marker.
@@ -1259,6 +1267,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         agent.model = model.clone();
                         status.model = model;
                         apply_model_effort(agent, &mut status);
+                        save_selected_model(options.model_provider, &agent.model, &mut status);
                     }
                     continue;
                 }
@@ -1399,7 +1408,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     let store = store.clone();
                     let id = if args.trim().is_empty() {
                         let list_store = store.clone();
-                        match tokio::task::spawn_blocking(move || list_store.list())
+                        match tokio::task::spawn_blocking(move || list_store.list_nonempty())
                             .await
                             .map_err(io::Error::other)?
                         {
@@ -1662,6 +1671,15 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 {
                     if agent.model != previous_model {
                         apply_model_effort(agent, &mut status);
+                        save_selected_model(options.model_provider, &agent.model, &mut status);
+                    } else {
+                        let parts: Vec<_> = prompt.split_whitespace().collect();
+                        if matches!(
+                            parts.as_slice(),
+                            ["/model", _, ..] | ["/config", "model", _, ..]
+                        ) {
+                            save_selected_model(options.model_provider, &agent.model, &mut status);
+                        }
                     }
                     let mut command_parts = prompt.split_whitespace();
                     if command_parts.next() == Some("/effort") {

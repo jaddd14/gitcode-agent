@@ -358,6 +358,13 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             _ => config::Protocol::Anthropic,
         };
     }
+    if cli.model.is_none() && !env.contains_key("GITCODE_MODEL") {
+        match gitcode::model_preferences::get(&home, &config.provider) {
+            Ok(Some(model)) => config.model = model,
+            Ok(None) => {}
+            Err(error) => eprintln!("Не удалось загрузить сохранённую модель: {error}"),
+        }
+    }
     let mut prompt = match cli.command {
         Some(Commands::Exec { prompt }) => Some(prompt),
         _ => cli.prompt,
@@ -455,7 +462,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         } else if continue_session {
             Some(
                 store
-                    .list()?
+                    .list_nonempty()?
                     .first()
                     .ok_or_else(|| {
                         std::io::Error::new(std::io::ErrorKind::NotFound, "no session to continue")
@@ -661,6 +668,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             gitcode::tui::app::Options {
                 model: &config.model,
                 provider: &config.provider.name,
+                model_provider: &config.provider,
                 cwd: &cwd,
                 branch: &branch,
                 permission,

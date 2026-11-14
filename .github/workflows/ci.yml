@@ -43,9 +43,6 @@ jobs:
         run: cargo test --locked --test foundations executable_authenticates_with_saved_key_and_hides_reflected_errors -- --exact
       - name: Build with declared minimum Rust
         run: cargo +1.99.0 build --release --locked
-      - name: Windows terminal disconnect and reconnect
-        if: runner.os == 'Windows'
-        run: python -I scripts/test-windows-detach-ci.py
       - name: Native executable version and doctor
         run: |
           python -I - <<'PY'
@@ -72,6 +69,28 @@ jobs:
             ${{ github.workspace }}/target/release/gitcode.exe
           if-no-files-found: error
           retention-days: 2
+  windows-detach:
+    name: Windows terminal disconnect and reconnect
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: rustup toolchain install 1.99.0 --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ github.workspace }}/target
+          key: ci-${{ runner.os }}-${{ runner.arch }}-1.99.0-${{ hashFiles('Cargo.lock') }}
+      - run: cargo +1.99.0 build --release --locked
+      - run: python -I scripts/test-windows-detach-ci.py
   installer-smoke:
     name: Installer smoke (${{ matrix.os }})
     needs: test

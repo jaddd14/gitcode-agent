@@ -55,6 +55,14 @@ def main():
             result = mux("list-sessions", "-F", "#{session_name}", check=False)
             return result.stdout.splitlines() if result.returncode == 0 else []
 
+        def diagnostic():
+            sessions = names()
+            panes = {}
+            for session in sessions:
+                result = mux("capture-pane", "-p", "-t", session, check=False)
+                panes[session] = result.stdout[-4000:] if result.returncode == 0 else result.stderr[-1000:]
+            return f"sessions={sessions}; panes={panes}; errors={errors}"
+
         def wait_for(predicate, description, timeout=40):
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
@@ -62,9 +70,9 @@ def main():
                 if value:
                     return value
                 if errors:
-                    raise AssertionError(f"{description}: {errors}")
+                    raise AssertionError(f"{description}: {diagnostic()}")
                 time.sleep(0.2)
-            raise AssertionError(f"timed out: {description}; sessions={names()}; errors={errors}")
+            raise AssertionError(f"timed out: {description}; {diagnostic()}")
 
         def serve():
             try:

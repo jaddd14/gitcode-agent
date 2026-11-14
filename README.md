@@ -61,7 +61,7 @@ Diagnostic logs redact registered credentials and some common token forms as a b
 
 ## <img src="assets/icons/wrench.svg" alt="" width="20" height="20"> Configuration and development
 
-Configuration precedence is defaults, user config, project config, local project config, environment, then applicable CLI flags. Project config cannot redirect credentials without explicit user trust. See [configuration](docs/configuration.md), [permissions](docs/permissions.md), [subagents](docs/subagents.md), [MCP](docs/mcp.md), and [hooks](docs/hooks.md).
+Configuration precedence is defaults, user config, project config, local project config, environment, then applicable CLI flags. A model selected interactively is remembered per provider and takes precedence over config files; `GITCODE_MODEL` and `--model` override it. Project config cannot redirect credentials without explicit user trust. See [configuration](docs/configuration.md), [permissions](docs/permissions.md), [subagents](docs/subagents.md), [MCP](docs/mcp.md), and [hooks](docs/hooks.md).
 
 ```sh
 ./scripts/check.sh

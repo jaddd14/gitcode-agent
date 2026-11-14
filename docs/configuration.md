@@ -1,5 +1,7 @@
 # Configuration
 
+An interactively selected model is remembered for its provider across launches and new sessions. It takes precedence over configuration files; `GITCODE_MODEL` and `--model` take precedence over the saved selection.
+
 Layers: defaults, `~/.gitcode/config.toml`, `.gitcode/config.toml`, `.gitcode/config.local.toml`, environment, applicable CLI overrides. Unknown keys are rejected.
 
 Project configuration cannot redirect the provider, change its credential name, or interpolate environment variables by default. Put provider settings in the user configuration or pass an explicit CLI endpoint. To trust a project configuration with these capabilities, set `trust_project_config = true` in the user configuration; a project cannot grant itself this trust.

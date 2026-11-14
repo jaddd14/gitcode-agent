@@ -330,6 +330,15 @@ impl SessionStore {
         Ok(result)
     }
 
+    /// List recoverable conversations, excluding sessions with no messages.
+    pub fn list_nonempty(&self) -> io::Result<Vec<SessionSummary>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|session| session.message_count > 0)
+            .collect())
+    }
+
     /// Fork exactly the first `message_count` committed messages into a new session.
     /// Reject an out-of-range count; never invent missing messages from a damaged tail.
     pub fn fork(

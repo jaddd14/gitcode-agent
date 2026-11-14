@@ -60,6 +60,22 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn resume_list_skips_empty_sessions_without_deleting_them() {
+    let f = Fixture::new();
+    let store = f.store();
+    let empty = store.create("gitcode session", None).unwrap();
+    let conversation = store.create("chat", None).unwrap();
+    store
+        .append(&conversation.id, &Message::text(Role::User, "hello"))
+        .unwrap();
+    assert_eq!(store.list().unwrap().len(), 2);
+    let visible = store.list_nonempty().unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].id, conversation.id);
+    assert!(store.resume(&empty.id).unwrap().messages.is_empty());
+}
+
+#[test]
 fn canonical_storage_paths_are_checked_after_the_root_is_complete() {
     let f = Fixture::new();
     let home = fs::canonicalize(&f.home).unwrap();
