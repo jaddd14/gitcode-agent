@@ -332,6 +332,12 @@ impl<W: Write> Renderer<W> {
             viewport.mouse(event);
         }
     }
+    /// Clear stale mouse highlighting when keyboard input resumes.
+    pub fn clear_selection(&mut self) {
+        if let Some(viewport) = &mut self.viewport {
+            viewport.clear_selection();
+        }
+    }
     /// Whether the viewport has another scrolling animation frame.
     pub fn scroll_pending(&self) -> bool {
         self.viewport

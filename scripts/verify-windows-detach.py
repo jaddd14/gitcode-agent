@@ -16,7 +16,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "--launch":
     # from Windows Terminal so GitCode starts its own managed session.
     os.environ.pop("PSMUX_SESSION", None)
     os.environ["PSMUX_ALLOW_NESTING"] = "1"
-    raise SystemExit(subprocess.call(sys.argv[2:]))
+    with open(os.environ["GITCODE_TEST_LAUNCH_LOG"], "ab", buffering=0) as log:
+        raise SystemExit(subprocess.call(sys.argv[2:], stderr=log))
 
 BINARY = Path(os.environ.get("GITCODE_TEST_BINARY", Path(__file__).resolve().parents[1] / "target/release/gitcode.exe")).resolve()
 PSMUX = os.environ.get("GITCODE_TEST_PSMUX", "psmux.exe")
@@ -31,9 +32,11 @@ def main():
         project.mkdir()
         data_dir = root / "psmux"
         data_dir.mkdir()
+        launch_log = root / "launch.log"
         env = os.environ.copy()
         env.update(HOME=str(home), USERPROFILE=str(home), PSMUX_DATA_DIR=str(data_dir),
-                   PSMUX_NO_WARM="1", ANTHROPIC_API_KEY="fixture-key-only", GITCODE_ASCII="1")
+                   PSMUX_NO_WARM="1", ANTHROPIC_API_KEY="fixture-key-only", GITCODE_ASCII="1",
+                   GITCODE_TEST_LAUNCH_LOG=str(launch_log))
         for key in ("TMUX", "TMUX_PANE", "PSMUX_SESSION", "PSMUX_TARGET_SESSION"):
             env.pop(key, None)
         env["PATH"] = str(Path(PSMUX).resolve().parent) + os.pathsep + env.get("PATH", "")
@@ -61,7 +64,8 @@ def main():
             for session in sessions:
                 result = mux("capture-pane", "-p", "-t", session, check=False)
                 panes[session] = result.stdout[-4000:] if result.returncode == 0 else result.stderr[-1000:]
-            return f"sessions={sessions}; panes={panes}; errors={errors}"
+            launch_output = launch_log.read_text(encoding="utf-8", errors="replace")[-2000:] if launch_log.exists() else ""
+            return f"sessions={sessions}; panes={panes}; launch_stderr={launch_output!r}; errors={errors}"
 
         def wait_for(predicate, description, timeout=40):
             deadline = time.monotonic() + timeout

@@ -362,6 +362,9 @@ fn action(event: Event, editor: &mut Editor, renderer: &mut Renderer<io::Stdout>
     if let Event::Resize(w, h) = event {
         renderer.resize(w.into(), h.into());
     }
+    if matches!(event, Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Press) {
+        renderer.clear_selection();
+    }
     let result = editor.handle(event);
     if let Action::Submit(text) = &result {
         if let Some(home) = crate::platform::home_dir() {

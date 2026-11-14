@@ -59,6 +59,9 @@ impl Viewport {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
     pub fn set_frame(&mut self, frame: &Frame, prefix: usize) {
         self.frame = Some(frame.clone());
         self.prefix = prefix.min(frame.lines.len());
@@ -194,7 +197,7 @@ impl Viewport {
                 } else {
                     self.content_point(screen)
                 };
-                if let Some(s) = &mut self.selection {
+                if let Some(s) = self.selection.as_mut().filter(|s| s.dragging) {
                     s.cursor = point;
                     s.pointer = screen;
                     s.changed = Instant::now();
@@ -207,7 +210,7 @@ impl Viewport {
                 } else {
                     self.content_point(screen)
                 };
-                if let Some(s) = &mut self.selection {
+                if let Some(s) = self.selection.as_mut().filter(|s| s.dragging) {
                     s.cursor = point;
                     s.pointer = screen;
                     s.changed = Instant::now();
@@ -326,7 +329,7 @@ impl Viewport {
             // In the composer the terminal already draws a blinking caret. A single
             // click with nothing dragged would paint one more reverse-video cell
             // right next to it, so only a real text range is highlighted.
-            let skip = s.composer && s.text.trim().is_empty();
+            let skip = s.start == s.end || (s.composer && s.text.trim().is_empty());
             let first = if s.composer { chat_height } else { 0 };
             let last = if s.composer {
                 rows.len()
@@ -469,6 +472,31 @@ mod tests {
             column,
             modifiers: KeyModifiers::NONE,
         }
+    }
+
+    #[test]
+    fn single_click_and_late_mouse_events_do_not_create_highlights() {
+        let mut v = Viewport::default();
+        v.append(&["ordinary response text".into()]);
+        v.set_frame(
+            &Frame {
+                lines: vec!["prompt".into()],
+                cursor: None,
+            },
+            0,
+        );
+        v.draw(&mut Vec::new(), (40, 3)).unwrap();
+        v.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 2));
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0, 2));
+        v.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0, 18));
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0, 18));
+        let mut output = Vec::new();
+        v.draw(&mut output, (40, 3)).unwrap();
+        assert!(!String::from_utf8(output).unwrap().contains("\x1b[7m"));
+        assert_eq!(
+            v.selection.as_ref().unwrap().start,
+            v.selection.as_ref().unwrap().end
+        );
     }
 
     #[test]
