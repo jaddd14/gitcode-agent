@@ -2,19 +2,23 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.3.1] - Unreleased
+## [0.3.1] - 2026-11-14
 
 ### Added
 
 - Automatic context summaries with retained session history, attachments and a live progress indicator.
-- Windows session persistence through an installed psmux; native Windows disconnect testing is required before release.
+- Windows session persistence through an installed psmux.
 - Session import and a token-sized recent context tail for compaction.
+- Remember the selected model per provider across launches and new sessions.
 
 ### Fixed
 
 - Hardened project configuration, command completion, session recovery and interactive approvals.
 - Deny common credential paths in native file tools and redact common credential forms in diagnostic logs.
 - Update the README to describe current functionality, setup and security boundaries.
+- Hide empty sessions from resume and continue, while retaining their journals.
+- Close table borders, shorten long tool-call previews, and prevent stale mouse selections.
+- Recognize current psmux version output on Windows.
 
 ## [0.3.0] - 2026-11-09
 
