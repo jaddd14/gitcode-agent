@@ -230,6 +230,7 @@ async fn interrupted_turn_keeps_request_completed_tools_and_marks_running_tool()
         assert!(encoded.contains("read_1") && encoded.contains("bash_1"));
     }
     server.await.unwrap();
+    agent.tools.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -382,6 +383,8 @@ async fn queued_messages_reach_the_model_after_tools_in_order_without_reexecutio
         2
     );
     server.await.unwrap();
+    drop(run);
+    agent.tools.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
 
