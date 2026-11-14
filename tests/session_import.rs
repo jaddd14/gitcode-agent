@@ -16,7 +16,11 @@ fn imports_claude_and_codex_into_resumable_sessions() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     fs::create_dir(&project).unwrap();
-    let store = SessionStore::open(root.path(), &project).unwrap();
+    let store = SessionStore::open(
+        root.path().canonicalize().unwrap(),
+        project.canonicalize().unwrap(),
+    )
+    .unwrap();
     let claude = root.path().join(".claude/projects/project/claude.jsonl");
     write_jsonl(
         &claude,
@@ -91,7 +95,11 @@ fn malformed_inputs_are_reported_without_creating_sessions() {
     let file = root.path().join(".codex/sessions/broken.jsonl");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "{bad json\n").unwrap();
-    let store = SessionStore::open(root.path(), &project).unwrap();
+    let store = SessionStore::open(
+        root.path().canonicalize().unwrap(),
+        project.canonicalize().unwrap(),
+    )
+    .unwrap();
     let report = import::import_all(root.path(), &store, import::Source::Codex).unwrap();
     assert_eq!((report.imported, report.failed), (0, 1));
     assert!(report.errors[0].contains("broken.jsonl"));
@@ -123,7 +131,11 @@ fn inline_attachments_survive_import_resume_and_all_provider_encoders() {
         ],
     );
     let conversation = import::read(&path).unwrap();
-    let store = SessionStore::open(root.path(), &project).unwrap();
+    let store = SessionStore::open(
+        root.path().canonicalize().unwrap(),
+        project.canonicalize().unwrap(),
+    )
+    .unwrap();
     let session = import::save(&store, &conversation).unwrap();
     let messages = store.resume(&session.id).unwrap().messages;
     assert!(messages[0].content.iter().any(|c| matches!(c, Content::Image {media_type,data} if media_type == "image/png" && data == "aW1hZ2U=")));
@@ -233,7 +245,11 @@ fn bulk_imports_all_projects_with_original_titles_and_no_duplicates() {
         &nested,
         &[json!({"type":"user","sessionId":"child", "message":{"content":"subagent"}})],
     );
-    let store = SessionStore::open(root.path(), &project).unwrap();
+    let store = SessionStore::open(
+        root.path().canonicalize().unwrap(),
+        project.canonicalize().unwrap(),
+    )
+    .unwrap();
     let old = import::read(&claude_a).unwrap();
     let existing = store
         .import(
@@ -389,7 +405,11 @@ fn persistent_provenance_skips_sources_and_keeps_index_renames() {
             json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Prompt"}]}}),
         ],
     );
-    let store = SessionStore::open(root.path(), &project).unwrap();
+    let store = SessionStore::open(
+        root.path().canonicalize().unwrap(),
+        project.canonicalize().unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         import::import_all(root.path(), &store, import::Source::Codex)
             .unwrap()
@@ -408,7 +428,11 @@ fn persistent_provenance_skips_sources_and_keeps_index_renames() {
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(old))
         .unwrap();
-    let store = SessionStore::open(root.path(), &project).unwrap();
+    let store = SessionStore::open(
+        root.path().canonicalize().unwrap(),
+        project.canonicalize().unwrap(),
+    )
+    .unwrap();
     let index = root.path().join(".codex/session_index.jsonl");
     write_jsonl(&index, &[json!({"id":"thread","thread_name":"Renamed"})]);
     let report = import::import_all(root.path(), &store, import::Source::Codex).unwrap();

@@ -305,7 +305,11 @@ async fn truncated_summary_retries_smaller_chunks_and_keeps_full_history() {
         .contains("UNFINISHED_SUMMARY"));
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
-    let store = gitcode::session::store::SessionStore::open(home.path(), project.path()).unwrap();
+    let store = gitcode::session::store::SessionStore::open(
+        home.path().canonicalize().unwrap(),
+        project.path().canonicalize().unwrap(),
+    )
+    .unwrap();
     let session = store.create("checkpoint", None).unwrap();
     for message in &original {
         store.append(&session.id, message).unwrap();
