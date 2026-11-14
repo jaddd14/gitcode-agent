@@ -169,16 +169,17 @@ mod tests {
     #[test]
     fn records_commands_multiline_duplicates_and_keeps_last_hundred() {
         let home = tempfile::tempdir().unwrap();
-        append(home.path(), "/help").unwrap();
-        append(home.path(), "line one\nline two").unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        append(&home_path, "/help").unwrap();
+        append(&home_path, "line one\nline two").unwrap();
         assert_eq!(
-            load(home.path()).unwrap(),
+            load(&home_path).unwrap(),
             vec!["/help", "line one\nline two"]
         );
         for _ in 0..101 {
-            append(home.path(), "same").unwrap();
+            append(&home_path, "same").unwrap();
         }
-        assert_eq!(load(home.path()).unwrap(), vec!["same"; 100]);
+        assert_eq!(load(&home_path).unwrap(), vec!["same"; 100]);
         assert_eq!(
             fs::read_to_string(home.path().join(".gitcode/prompt-history.jsonl"))
                 .unwrap()
@@ -193,8 +194,17 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
-        let a = crate::session::store::SessionStore::open(home.path(), first.path()).unwrap();
-        let b = crate::session::store::SessionStore::open(home.path(), second.path()).unwrap();
+        let home_path = home.path().canonicalize().unwrap();
+        let a = crate::session::store::SessionStore::open(
+            &home_path,
+            first.path().canonicalize().unwrap(),
+        )
+        .unwrap();
+        let b = crate::session::store::SessionStore::open(
+            &home_path,
+            second.path().canonicalize().unwrap(),
+        )
+        .unwrap();
         let a_session = a.create("a", None).unwrap();
         let b_session = b.create("b", None).unwrap();
         a.append(&a_session.id, &Message::text(Role::User, "first prompt"))
@@ -213,7 +223,7 @@ mod tests {
         .unwrap();
         b.append(&b_session.id, &Message::text(Role::User, "second prompt"))
             .unwrap();
-        let entries = load(home.path()).unwrap();
+        let entries = load(&home_path).unwrap();
         assert_eq!(entries.len(), 2);
         assert!(entries.contains(&"first prompt".into()));
         assert!(entries.contains(&"second prompt".into()));
