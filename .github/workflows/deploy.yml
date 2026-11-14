@@ -24,11 +24,11 @@ jobs:
       name: staging
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - run: rustup toolchain install 1.99.0 --profile minimal
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -43,7 +43,7 @@ jobs:
           HOME="$smoke_home" ./target/release/gitcode doctor --json
           cargo test --test foundations --locked
       - run: tar -czf gitcode-staging-linux-x86_64.tar.gz -C target/release gitcode
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: staging-linux-x86_64
           path: gitcode-staging-linux-x86_64.tar.gz
@@ -61,8 +61,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
@@ -98,8 +98,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: rustup toolchain install 1.99.0 --profile minimal --target ${{ matrix.target }}
@@ -127,7 +127,7 @@ jobs:
                   for source, name in files:
                       archive.add(source, arcname=name)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.target }}
           path: dist/*
@@ -151,7 +151,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config python3
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.99.0
@@ -178,7 +178,7 @@ jobs:
           cp "target/$RELEASE_TARGET/release/gitcode" package/gitcode
           cp LICENSE README.md package/
           tar -czf "dist/gitcode-${GITHUB_REF_NAME}-${RELEASE_TARGET}.tar.gz" -C package gitcode LICENSE README.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.target }}
           path: dist/*
@@ -194,8 +194,8 @@ jobs:
       name: release
       url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: binary-*
           path: dist
