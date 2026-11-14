@@ -9,10 +9,25 @@ use std::{
 #[test]
 fn provider_preset_selects_protocol_and_credential() {
     let temp = tempfile::tempdir().unwrap();
+    let temp_path = temp.path().canonicalize().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let (mut socket, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "provider was not contacted"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("provider listener failed: {error}"),
+            }
+        };
         socket
             .set_read_timeout(Some(std::time::Duration::from_secs(10)))
             .unwrap();
@@ -58,18 +73,18 @@ fn provider_preset_selects_protocol_and_credential() {
             "hi",
         ])
         .env_clear()
-        .env("HOME", temp.path())
-        .env("USERPROFILE", temp.path())
+        .env("HOME", &temp_path)
+        .env("USERPROFILE", &temp_path)
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("OPENAI_API_KEY", "fixture-openai-key")
-        .current_dir(temp.path())
+        .current_dir(&temp_path)
         .output()
         .unwrap();
-    server.join().unwrap();
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    server.join().unwrap();
     assert!(String::from_utf8_lossy(&output.stdout).contains("ok"));
 }
