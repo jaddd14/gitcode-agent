@@ -1,14 +1,14 @@
 # Built-in slash commands
 
-The dispatcher renders bounded cards, not interactive pickers unless noted below. Descriptions describe actual local behavior, not the full M18 target. Commands never call a model. Unsupported arguments are rejected rather than silently ignored. Changes to model, limits, and permission rules are process-local and are not saved to configuration.
+The dispatcher renders bounded cards, not interactive pickers unless noted below. Descriptions describe actual local behavior, not the full M18 target. The /compact command calls the configured model; the remaining dispatcher actions do not. Unsupported arguments are rejected rather than silently ignored. Changes to model, limits, and permission rules are process-local and are not saved to configuration.
 
 | Command | Accepted arguments | Current UI and behavior |
 |---|---|---|
 | `/help` | None | Grouped command card and keyboard reference. |
 | `/clear` | None | Clears in-memory messages; saved journals remain. |
 | `/new` | None | Alias for `/clear`, not a new persistent session. |
-| `/compact` | None | Trims long tool results; card reports approximate token reduction. No model summarization. |
-| `/config` | `[model <id>\|max_turns <positive integer>]` | Settings table; only these two keys can be changed. Other displayed settings are read-only. |
+| `/compact` | Optional focus | Generates a resumable model checkpoint while preserving the full journal. |
+| `/config` | `[model <id>\|max_turns <nonnegative integer>]` | Settings table; max_turns 0 means unlimited. Other displayed settings are read-only. |
 | `/model` | `[model-id]` | Changes model identifier; static example identifiers are not a discovered/validated availability list. No picker. |
 | `/effort` | `[default\|low\|medium\|high\|xhigh\|max]` | Select reasoning effort in the TUI or specify it directly; defaults to xhigh and is remembered separately for each model. Model/provider support varies. |
 | `/provider` | None | Transport/auth configuration reference; does not switch providers. |
@@ -16,6 +16,7 @@ The dispatcher renders bounded cards, not interactive pickers unless noted below
 | `/cost` | None | Current status counters and estimated cost; no top-model ranking. |
 | `/status` | None | Model, permission, workspace, branch, message count and counters table. |
 | `/context` | None | Approximate text-based token table and aggregate bar, assuming an explicitly labeled 200k window. Not a measured model window or stacked bar. |
+| `/import` | `[path]` | Import a Claude Code or Codex JSONL session. Choose Claude Code or Codex to import all discovered sessions from all projects, or enter a path; existing imports are skipped and source titles are preserved where available; imported conversations appear in `/resume`. Text, tool calls/results, available reasoning, inline images and PDFs become portable context (attachment support depends on the model); the complete original journal is saved in a private `.source` file beside the session, including attachments and provider-specific state. Source files are limited to 128 MiB and converted sessions to 16 MiB. |
 | `/resume` | `[session-id]` | Interactive scrollable project session picker with search by title, branch, or ID; or open an ID directly. Loads the messages and switches the active journal so new turns are saved to that session. Invalid IDs preserve the current session. Counters and workspace files are not restored. |
 | `/rewind` | `[message-index]` | Lists recent messages or removes messages from a zero-based index onward. Does not restore files or shadow-git checkpoints. |
 | `/plan` | `[task]` | Enables read-only permission mode. Task text is displayed, not submitted for execution. |
@@ -44,12 +45,5 @@ The dispatcher renders bounded cards, not interactive pickers unless noted below
 
 `cargo test --test command_actions` exercises commands offline with temporary HOME/workspace directories and a non-serving localhost provider URL. It checks permission rejection and accepted writes, context restore/failure preservation, honest clipboard/commit/Vim responses, config validation, exports and card cell bounds at widths 60/80/120. It does not contact a provider or use the operator's real `~/.gitcode`. The width checks execute command handlers, not synthetic frames, but are not per-command golden snapshots.
 
-## Remaining M18 command gaps
 
-- Model/provider, session/checkpoint, agent, permission and configuration screens are not interactive selection/editing flows. Session list lacks age; resume is context import only.
-- Shared Write handles `/init` and `/export`, but their Ask decisions have no interactive approval continuation. Neither command grants itself approval.
-- Clipboard integration, actual commit editor/confirmation, Vim mode, extra workspace roots, authentication/logout actions, theme switching and terminal setup are not implemented by these commands.
-- Diff is truncated and static; no file/hunk navigation, staged/untracked coverage, or file restoration through `/rewind`. Review is git status only.
-- Context window and categories are estimates, not provider-reported usage; no stacked segments. Compact trims results only. MCP health/tool counts, configured hook details and agent details are absent.
-- The static usage dispatcher passes an empty session ID; current-session attribution requires the app's session-aware path. Ledger read failures produce an error card, not a fabricated empty state. Complete usage semantics/live rate-limit data must be verified separately in `usage_panel`/app, not inferred from this command table.
-- Per-command golden snapshots at 60/80/120 and the full real-terminal M18 verification matrix remain required. Widget/card bounds tests alone do not fulfill those acceptance criteria.
+The command surface continues to evolve. The running application’s `/help` and individual guides are the authoritative descriptions of current behavior.

@@ -59,6 +59,7 @@ pub fn resolve(
 }
 
 /// Sensitive bytes that never appear through Debug or Display.
+#[derive(Clone)]
 pub struct Secret(String);
 
 impl Secret {
@@ -182,6 +183,25 @@ pub fn redact(text: &str, secrets: &[Secret]) -> String {
     for value in values {
         output = output.replace(value, "[REDACTED]");
     }
+    // These common forms supplement, but cannot replace, registering exact
+    // provider credentials: arbitrary secrets do not have a universal syntax.
+    static FIELDS: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)(\b(?:authorization|x-api-key|api[_-]?key)\b["']?\s*[:=]\s*["']?)(?:bearer\s+)?[^\s,"'}]+"#).ok()
+    });
+    static BEARER: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/-]+=*").ok()
+    });
+    static API_KEY: std::sync::LazyLock<Option<regex::Regex>> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\bsk-[A-Za-z0-9_-]{8,}").ok());
+    if let Some(pattern) = FIELDS.as_ref() {
+        output = pattern.replace_all(&output, "${1}[REDACTED]").into_owned();
+    }
+    if let Some(pattern) = BEARER.as_ref() {
+        output = pattern.replace_all(&output, "${1}[REDACTED]").into_owned();
+    }
+    if let Some(pattern) = API_KEY.as_ref() {
+        output = pattern.replace_all(&output, "[REDACTED]").into_owned();
+    }
     output
 }
 
@@ -196,5 +216,20 @@ mod tests {
             redact("key=example-sensitive-value", &[secret]),
             "key=[REDACTED]"
         );
+    }
+
+    #[test]
+    fn redacts_common_unregistered_credential_forms() {
+        let input = r#"Bearer opaque.token-value api_key=example-key {"authorization":"Bearer another-token","x-api-key":"third-token"} sk-1234567890abcdef"#;
+        let result = redact(input, &[]);
+        for secret in [
+            "opaque.token-value",
+            "example-key",
+            "another-token",
+            "third-token",
+            "sk-1234567890abcdef",
+        ] {
+            assert!(!result.contains(secret), "credential was not redacted");
+        }
     }
 }

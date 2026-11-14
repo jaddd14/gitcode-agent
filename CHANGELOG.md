@@ -8,12 +8,15 @@ All notable changes are documented here. This project follows [Keep a Changelog]
 
 - Automatic context summaries with retained session history, attachments and a live progress indicator.
 - Windows session persistence through an installed psmux; native Windows disconnect testing is required before release.
+- Session import and a token-sized recent context tail for compaction.
 
 ### Fixed
 
 - Hardened project configuration, command completion, session recovery and interactive approvals.
+- Deny common credential paths in native file tools and redact common credential forms in diagnostic logs.
+- Update the README to describe current functionality, setup and security boundaries.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-11-09
 
 ### Added
 

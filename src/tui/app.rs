@@ -203,6 +203,31 @@ fn update_copy_notice(
     Ok(false)
 }
 
+async fn save_compaction_checkpoint(
+    agent: &Agent,
+    persistence: &Option<(
+        crate::session::store::SessionStore,
+        crate::session::store::Session,
+    )>,
+    messages: &[Message],
+) -> io::Result<()> {
+    let Some((store, session)) = persistence else {
+        return Ok(());
+    };
+    let Some(data) = agent
+        .compaction
+        .snapshot(messages)
+        .map_err(io::Error::other)?
+    else {
+        return Ok(());
+    };
+    let store = store.clone();
+    let id = session.id.clone();
+    tokio::task::spawn_blocking(move || store.save_compaction(&id, &data))
+        .await
+        .map_err(io::Error::other)?
+}
+
 fn remove_queued_prompt(status: &mut Status, prompt: &str) {
     if let Some(index) = status
         .queued_prompts
@@ -329,7 +354,13 @@ fn action(event: Event, editor: &mut Editor, renderer: &mut Renderer<io::Stdout>
     if let Event::Resize(w, h) = event {
         renderer.resize(w.into(), h.into());
     }
-    editor.handle(event)
+    let result = editor.handle(event);
+    if let Action::Submit(text) = &result {
+        if let Some(home) = crate::platform::home_dir() {
+            let _ = crate::session::history::append(&home, text);
+        }
+    }
+    result
 }
 
 fn format_user_turn(prompt: &str, width: usize, theme: &Theme, mode: ColorMode) -> Vec<String> {
@@ -504,20 +535,369 @@ fn style_tool_rows(
                 format!(
                     "{}{marker}{} {text}",
                     theme::foreground(theme.rose, mode),
+                    theme::default_foreground(mode)
+                )
+            } else if started {
+                format!(
+                    "{}{row}{}",
+                    theme::default_foreground(mode),
                     theme::reset(mode)
                 )
             } else {
                 let color = if error {
                     theme::foreground(theme.error, mode)
-                } else if started {
-                    theme::default_foreground(mode).to_owned()
                 } else {
-                    theme::foreground(theme.panel_text, mode)
+                    theme::foreground(theme.placeholder, mode)
                 };
                 format!("{color}{row}{}", theme::reset(mode))
             }
         })
         .collect()
+}
+
+fn completed_tool_rows(
+    name: &str,
+    output: &str,
+    is_error: bool,
+    duration_ms: u64,
+    width: usize,
+    theme: &Theme,
+    mode: ColorMode,
+) -> Vec<String> {
+    let mut rows = if name == "Agent" && !is_error {
+        super::tool_card::completed_agent(output, width.saturating_sub(1).max(1), theme, mode)
+    } else {
+        let rows = super::tool_card::completed(
+            name,
+            output,
+            is_error,
+            duration_ms,
+            width.saturating_sub(1).max(20),
+        );
+        style_tool_rows(
+            &rows,
+            false,
+            is_error || output.contains("[exit code:") || output.contains("[command timed out]"),
+            theme,
+            mode,
+        )
+    };
+    rows.push(String::new());
+    rows
+}
+
+fn replay_rows(messages: &[Message], width: usize, theme: &Theme, mode: ColorMode) -> Vec<String> {
+    let mut calls = std::collections::HashMap::new();
+    let mut rows = Vec::new();
+    for message in messages {
+        if message.role == Role::System {
+            continue;
+        }
+        for content in &message.content {
+            match content {
+                Content::Text { text } => match message.role {
+                    Role::User => rows.extend(format_user_turn(text, width, theme, mode)),
+                    Role::Assistant => {
+                        let mut markdown = super::markdown::Markdown::new();
+                        markdown.push(text);
+                        rows.extend(format_assistant_turn(
+                            &mut markdown,
+                            false,
+                            width,
+                            theme,
+                            mode,
+                        ));
+                    }
+                    Role::System => {}
+                },
+                Content::ToolUse { id, name, input } => {
+                    let display_input;
+                    let (name, input) = if matches!(
+                        name.as_str(),
+                        "exec_command"
+                            | "shell_command"
+                            | "functions.exec_command"
+                            | "functions.shell_command"
+                            | "shell"
+                            | "functions.shell"
+                            | "local_shell_call"
+                            | "local_shell"
+                    ) {
+                        let command = input
+                            .get("cmd")
+                            .or_else(|| input.get("command"))
+                            .or_else(|| input.pointer("/action/command"));
+                        let command = match command {
+                            Some(serde_json::Value::String(command)) => command.clone(),
+                            Some(serde_json::Value::Array(args)) => args
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            _ => String::new(),
+                        };
+                        display_input = serde_json::json!({"command": command});
+                        ("Bash", &display_input)
+                    } else {
+                        (name.as_str(), input)
+                    };
+                    calls.insert(id.as_str(), name);
+                    let started =
+                        super::tool_card::started(name, input, width.saturating_sub(1).max(20));
+                    rows.extend(style_tool_rows(&started, true, false, theme, mode));
+                }
+                Content::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
+                    let name = calls.remove(tool_use_id.as_str()).unwrap_or("Tool");
+                    rows.extend(completed_tool_rows(
+                        name, content, *is_error, 0, width, theme, mode,
+                    ));
+                }
+                // Live thinking is accounting-only; opaque provider state is never transcript text.
+                Content::Thinking { .. } | Content::Image { .. } | Content::Document { .. } => {}
+            }
+        }
+    }
+    rows
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod replay_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn call(id: &str, name: &str, input: serde_json::Value) -> Content {
+        Content::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input,
+        }
+    }
+
+    fn result(id: &str, output: &str, is_error: bool) -> Content {
+        Content::ToolResult {
+            tool_use_id: id.into(),
+            content: output.into(),
+            is_error,
+        }
+    }
+
+    #[test]
+    fn replay_matches_live_tool_cards_without_protocol_metadata() {
+        let theme = Theme::default();
+        for mode in [ColorMode::None, ColorMode::TrueColor] {
+            let input = json!({"command": "printf hello", "private_argument": "not displayed"});
+            let messages = vec![
+                Message {
+                    role: Role::Assistant,
+                    content: vec![
+                        Content::Thinking {
+                            thinking: "hidden reasoning".into(),
+                            signature: Some("opaque signature".into()),
+                            encrypted_content: Some("opaque state".into()),
+                        },
+                        call("private-call-id", "Bash", input.clone()),
+                    ],
+                },
+                Message {
+                    role: Role::User,
+                    content: vec![result("private-call-id", "hello\n[exit code: 0]", false)],
+                },
+            ];
+            let mut expected = style_tool_rows(
+                &super::super::tool_card::started("Bash", &input, 79),
+                true,
+                false,
+                &theme,
+                mode,
+            );
+            expected.extend(completed_tool_rows(
+                "Bash",
+                "hello\n[exit code: 0]",
+                false,
+                0,
+                80,
+                &theme,
+                mode,
+            ));
+            let rows = replay_rows(&messages, 80, &theme, mode);
+            assert_eq!(rows, expected);
+            let text = rows.join("\n");
+            assert!(text.contains("Bash(printf hello)"));
+            for hidden in [
+                "hidden reasoning",
+                "opaque",
+                "private",
+                "tool_use",
+                "tool_result",
+                "[exit code:",
+            ] {
+                assert!(!text.contains(hidden), "unexpected {hidden}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn replay_normalizes_codex_command_calls_for_display_only() {
+        for (name, input, command) in [
+            (
+                "exec_command",
+                json!({"cmd": "printf hello"}),
+                "printf hello",
+            ),
+            (
+                "functions.exec_command",
+                json!({"cmd": "printf hello"}),
+                "printf hello",
+            ),
+            (
+                "shell_command",
+                json!({"command": "printf hello"}),
+                "printf hello",
+            ),
+            (
+                "shell",
+                json!({"command": ["bash", "-lc", "pwd"]}),
+                "bash -lc pwd",
+            ),
+            (
+                "local_shell_call",
+                json!({"action": {"command": ["bash", "-lc", "pwd"]}}),
+                "bash -lc pwd",
+            ),
+            (
+                "local_shell",
+                json!({"command": ["bash", "-lc", "pwd"]}),
+                "bash -lc pwd",
+            ),
+            (
+                "shell_command",
+                json!({"command": ["printf", "hello"]}),
+                "printf hello",
+            ),
+        ] {
+            let messages = vec![
+                Message {
+                    role: Role::Assistant,
+                    content: vec![call("codex-call", name, input.clone())],
+                },
+                Message {
+                    role: Role::User,
+                    content: vec![result("codex-call", "hello\n[exit code: 0]", false)],
+                },
+            ];
+            let original = serde_json::to_value(&messages).unwrap();
+            for mode in [ColorMode::None, ColorMode::TrueColor] {
+                let theme = Theme::default();
+                let mut expected = style_tool_rows(
+                    &super::super::tool_card::started("Bash", &json!({"command": command}), 79),
+                    true,
+                    false,
+                    &theme,
+                    mode,
+                );
+                expected.extend(completed_tool_rows(
+                    "Bash",
+                    "hello\n[exit code: 0]",
+                    false,
+                    0,
+                    80,
+                    &theme,
+                    mode,
+                ));
+                let rows = replay_rows(&messages, 80, &theme, mode);
+                assert_eq!(rows, expected, "{name}: {input}");
+                assert!(rows.join("\n").contains(&format!("Bash({command})")));
+                assert_eq!(serde_json::to_value(&messages).unwrap(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn replay_resolves_multiple_calls_by_id_and_keeps_block_order() {
+        let messages = vec![
+            Message::text(Role::System, "system instruction"),
+            Message::text(Role::User, "user prompt"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Text {
+                        text: "before tools".into(),
+                    },
+                    call("read", "Read", json!({"path": "file.rs"})),
+                    call("bash", "Bash", json!({"command": "false"})),
+                ],
+            },
+            Message {
+                role: Role::User,
+                content: vec![
+                    result("bash", "denied", true),
+                    result("read", "one\ntwo\nthree\nfour", false),
+                ],
+            },
+            Message::text(Role::Assistant, "after tools"),
+        ];
+        let text = replay_rows(&messages, 80, &Theme::default(), ColorMode::None).join("\n");
+        let positions: Vec<_> = [
+            "user prompt",
+            "before tools",
+            "Read(file.rs)",
+            "Bash(false)",
+            "Error: denied",
+            "Read 4 lines",
+            "after tools",
+        ]
+        .iter()
+        .map(|part| text.find(part).unwrap())
+        .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(!text.contains("system instruction"));
+    }
+
+    #[test]
+    fn replay_handles_orphan_results_and_unfinished_calls() {
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![result("missing", "orphan output\u{1b}[31m", false)],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![call("pending", "Bash", json!({"command": "sleep 1"}))],
+            },
+        ];
+        let text = replay_rows(&messages, 80, &Theme::default(), ColorMode::None).join("\n");
+        assert!(text.contains("orphan output"));
+        assert!(text.contains("Bash(sleep 1)"));
+        assert!(!text.contains("missing"));
+        assert!(!text.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn replay_agent_uses_markdown_result_rendering() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![call(
+                    "agent",
+                    "Agent",
+                    json!({"description": "check", "subagent_type": "general-purpose"}),
+                )],
+            },
+            Message {
+                role: Role::User,
+                content: vec![result("agent", "**Result:** `ok`", false)],
+            },
+        ];
+        let text = replay_rows(&messages, 80, &Theme::default(), ColorMode::TrueColor).join("\n");
+        assert!(text.contains("\u{1b}[1mResult:\u{1b}[22m"));
+        assert!(!text.contains("**"));
+        assert!(!text.contains('`'));
+    }
 }
 
 async fn stage_clipboard_image(editor: &mut Editor, status: &mut Status) {
@@ -627,6 +1007,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     let _ = feedback.set_title(&mut io::stdout());
     let mut events = EventStream::new();
     let mut editor = Editor::default();
+    if let Some(home) = crate::platform::home_dir() {
+        if let Ok(history) = crate::session::history::load(&home) {
+            editor.set_history(history);
+        }
+    }
     let mut initial = None;
     if !options.no_intro {
         match intro::play(&mut events, |elapsed| {
@@ -664,10 +1049,18 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
         .as_ref()
         .map(|(_, session)| session.messages.clone())
         .unwrap_or_default();
+    renderer.finalize_styled(&replay_rows(
+        &messages,
+        renderer.size().0,
+        &Theme::default(),
+        mode,
+    ))?;
     let queue = InputQueue::default();
+    let background_handles = agent.tools.background_handles();
     let mut exit_armed = false;
     let mut copy_deadline = None;
     loop {
+        status.background_jobs = background_count(&background_handles);
         status.queued = queue.len();
         paint(
             &mut renderer,
@@ -694,7 +1087,10 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 None => loop {
                     tokio::select! {
                         event = events.next() => match event { Some(event) => break Some(event?), None => return Ok(()) },
-                        _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                        _ = tokio::time::sleep(Duration::from_millis(35)) => {
+                            if renderer.scroll_pending() { break None; }
+                            let count = background_count(&background_handles);
+                            if count != status.background_jobs { status.background_jobs = count; break None; }
                             if update_copy_notice(&mut renderer, &mut status, &mut copy_deadline)? { break None; }
                         }
                     }
@@ -818,6 +1214,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         ..Status::default()
                     };
                     messages.clear();
+                    agent.compaction.clear();
                     queue.clear();
                     status.queued_prompts.clear();
                     status.queued = 0;
@@ -888,6 +1285,110 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 }
                 if let Some(args) = prompt
                     .trim()
+                    .strip_prefix("/import")
+                    .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    let Some((store, _)) = &persistence else {
+                        status.toast = Some("Хранилище сессий недоступно".into());
+                        continue;
+                    };
+                    let store = store.clone();
+                    let choice = if args.trim().is_empty() {
+                        super::import_picker::select(&mut renderer, &mut events).await?
+                    } else {
+                        Some(super::import_picker::Choice::Path(
+                            super::import_picker::expand_path(args.trim()),
+                        ))
+                    };
+                    let path = match choice {
+                        Some(super::import_picker::Choice::Path(path)) => Some(path),
+                        Some(super::import_picker::Choice::Automatic(source)) => {
+                            let home = crate::platform::home_dir()
+                                .ok_or_else(|| io::Error::other("home directory is required"))?;
+                            let batch_store = store.clone();
+                            renderer.finalize_card(&super::widgets::card(
+                                "/import",
+                                &["Поиск и импорт сессий. Это может занять некоторое время…"
+                                    .into()],
+                                "",
+                                renderer.size().0.saturating_sub(1),
+                            ))?;
+                            let result = tokio::task::spawn_blocking(move || {
+                                crate::session::import::import_all(&home, &batch_store, source)
+                            })
+                            .await
+                            .map_err(io::Error::other)?;
+                            let mut body = Vec::new();
+                            match result {
+                                Ok(report) => {
+                                    body.push(format!(
+                                        "Импортировано: {} · уже было: {} · названий исправлено: {} · ошибок: {}",
+                                        report.imported, report.skipped, report.renamed, report.failed
+                                    ));
+                                    for error in report.errors {
+                                        body.push(format!("Не удалось: {}", super::plain(&error)));
+                                    }
+                                    body.push(
+                                        "Откройте импортированные чаты через /resume.".into(),
+                                    );
+                                }
+                                Err(error) => body.push(format!(
+                                    "Ошибка импорта: {}",
+                                    super::plain(&error.to_string())
+                                )),
+                            }
+                            renderer.finalize_card(&super::widgets::card(
+                                "/import",
+                                &body,
+                                "",
+                                renderer.size().0.saturating_sub(1),
+                            ))?;
+                            None
+                        }
+                        None => None,
+                    };
+                    if let Some(path) = path {
+                        let result = tokio::task::spawn_blocking(move || {
+                            let conversation = crate::session::import::read_named(&path)?;
+                            crate::session::import::save(&store, &conversation)
+                        })
+                        .await
+                        .map_err(io::Error::other)?;
+                        match result {
+                            Ok(session) => {
+                                let body = vec![
+                                    format!(
+                                        "Импортирована сессия · сообщений: {}",
+                                        session.messages.len()
+                                    ),
+                                    format!("ID: {}", session.id),
+                                    "Откройте чат через /resume. Исходный журнал сохранён рядом с сессией.".into(),
+                                ];
+                                renderer.finalize_card(&super::widgets::card(
+                                    "/import",
+                                    &body,
+                                    "",
+                                    renderer.size().0.saturating_sub(1),
+                                ))?;
+                            }
+                            Err(error) => {
+                                let body = vec![format!(
+                                    "Не удалось импортировать: {}",
+                                    super::plain(&error.to_string())
+                                )];
+                                renderer.finalize_card(&super::widgets::card(
+                                    "/import",
+                                    &body,
+                                    "",
+                                    renderer.size().0.saturating_sub(1),
+                                ))?;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if let Some(args) = prompt
+                    .trim()
                     .strip_prefix("/resume")
                     .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
                 {
@@ -930,6 +1431,16 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                 let id = session.id.clone();
                                 let interrupted = session.interrupted_bytes > 0;
                                 messages = session.messages.clone();
+                                agent.compaction.clear();
+                                let checkpoint_store = store.clone();
+                                let checkpoint_id = session.id.clone();
+                                if let Ok(Ok(Some(data))) = tokio::task::spawn_blocking(move || {
+                                    checkpoint_store.load_compaction(&checkpoint_id)
+                                })
+                                .await
+                                {
+                                    agent.compaction.restore(&data, &messages);
+                                }
                                 persistence = Some((store, session));
                                 let permission = status.permission.clone();
                                 let branch = status.branch.clone();
@@ -957,37 +1468,12 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     "",
                                     renderer.size().0.saturating_sub(1),
                                 ))?;
-                                for message in &messages {
-                                    for content in &message.content {
-                                        if let Content::Text { text } = content {
-                                            match message.role {
-                                                Role::User => {
-                                                    renderer.finalize_styled(&format_user_turn(
-                                                        text,
-                                                        renderer.size().0,
-                                                        &Theme::default(),
-                                                        mode,
-                                                    ))?
-                                                }
-                                                Role::Assistant => {
-                                                    let mut markdown =
-                                                        super::markdown::Markdown::new();
-                                                    markdown.push(text);
-                                                    renderer.finalize_styled(
-                                                        &format_assistant_turn(
-                                                            &mut markdown,
-                                                            false,
-                                                            renderer.size().0,
-                                                            &Theme::default(),
-                                                            mode,
-                                                        ),
-                                                    )?;
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    }
-                                }
+                                renderer.finalize_styled(&replay_rows(
+                                    &messages,
+                                    renderer.size().0,
+                                    &Theme::default(),
+                                    mode,
+                                ))?;
                             }
                             Err(_) => {
                                 status.toast = Some(
@@ -1098,6 +1584,72 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     continue;
                 }
                 let card_width = renderer.size().0.saturating_sub(1);
+                if prompt
+                    .trim()
+                    .strip_prefix("/compact")
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+                {
+                    renderer.finalize("Сжимаю контекст… Esc — отмена.")?;
+                    let card = {
+                        let mut compact = Box::pin(commands::execute_command(
+                            &prompt,
+                            agent,
+                            &mut messages,
+                            &mut status,
+                            card_width,
+                        ));
+                        loop {
+                            tokio::select! {
+                                result = &mut compact => break result?,
+                                event = events.next() => match event {
+                                    Some(Ok(Event::Key(key))) if matches!(key.code, crossterm::event::KeyCode::Esc)
+                                        || (matches!(key.code, crossterm::event::KeyCode::Char('c')) && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)) => break None,
+                                    Some(Ok(Event::Resize(w, h))) => renderer.resize(w.into(), h.into()),
+                                    Some(Ok(_)) => {},
+                                    Some(Err(error)) => return Err(error),
+                                    None => return Ok(()),
+                                }
+                            }
+                        }
+                    };
+                    if let Some(card) = card {
+                        renderer.finalize_card(&card)?;
+                    } else {
+                        renderer.finalize("Сжатие отменено; полная история сохранена.")?;
+                    }
+                    let requests = agent.compaction.take_manual_usage();
+                    if !requests.is_empty() {
+                        if let Some((_, session)) = &persistence {
+                            let id = session.id.clone();
+                            let project = session.project.clone();
+                            let provider = options.provider.to_owned();
+                            let model = agent.model.clone();
+                            let home = crate::platform::home_dir()
+                                .ok_or_else(|| io::Error::other("home directory is required"))?;
+                            if tokio::task::spawn_blocking(move || {
+                                crate::usage::record_turn(
+                                    &home, &id, &project, &provider, &model, &requests,
+                                )
+                            })
+                            .await
+                            .map_err(io::Error::other)?
+                            .is_err()
+                            {
+                                status.toast =
+                                    Some("Не удалось сохранить статистику сжатия".into());
+                            }
+                        }
+                    }
+                    if save_compaction_checkpoint(agent, &persistence, &messages)
+                        .await
+                        .is_err()
+                    {
+                        status.toast = Some(
+                            "Не удалось сохранить сжатый контекст; полная история сохранена".into(),
+                        );
+                    }
+                    continue;
+                }
                 let previous_model = agent.model.clone();
                 if let Some(card) = commands::execute_command(
                     &prompt,
@@ -1140,10 +1692,12 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 let (sender, mut progress) = mpsc::channel(256);
                 let (approval_sender, mut approvals) = mpsc::channel(1);
                 let mut approval: Option<super::approval_picker::Pending> = None;
+                let (question_sender, mut questions) = mpsc::channel(1);
+                let mut question: Option<super::question_picker::Pending> = None;
                 let started = Instant::now();
                 let mut stream = super::markdown::Markdown::new();
                 let mut stream_started = false;
-                let mut tool_running = false;
+                let mut running_tools = 0usize;
                 let mut response_chunk = String::new();
                 let mut committed_response_text = false;
                 let mut dirty = true;
@@ -1157,12 +1711,13 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 let mut frames = frame_clock();
                 let checkpoint = crate::agent::TurnCheckpoint::new(request.clone());
                 let mut recovery = None;
-                let mut run = Box::pin(agent.run_with_approvals(
+                let mut run = Box::pin(agent.run_with_questions(
                     request,
                     Some(&sender),
                     Some(&checkpoint),
                     Some(&queue),
                     Some(&approval_sender),
+                    Some(&question_sender),
                 ));
                 loop {
                     tokio::select! {
@@ -1232,13 +1787,19 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                             mode,
                                         ))?;
                                     }
+                                    let turn_limit_reached = error.starts_with("agent reached the configured turn limit");
+                                    let advice = if turn_limit_reached {
+                                        "Совет: /config max_turns 0 и затем «продолжай».".into()
+                                    } else {
+                                        "Совет: проверь соединение или выполни /doctor.".into()
+                                    };
                                     let err_card = widgets::card(
                                         "Ошибка",
                                         &[
                                             format!("Причина: {error}"),
-                                            "Совет: проверь соединение или выполни /doctor.".into(),
+                                            advice,
                                         ],
-                                        "/doctor диагностика",
+                                        if turn_limit_reached { "/config настройки" } else { "/doctor диагностика" },
                                         renderer.size().0.saturating_sub(1),
                                     );
                                     renderer.finalize_card(&err_card)?;
@@ -1268,7 +1829,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     retry_deadline = Some((Instant::now() + Duration::from_millis(delay_ms), attempt, max_attempts));
                                 }
                                 Some(Progress::ToolStarted { name, input, .. }) => {
-                                    tool_running = true;
+                                    running_tools = running_tools.saturating_add(1);
                                     status.tools_used = status.tools_used.saturating_add(1);
                                     retry_deadline = None;
                                     status.retry_notice = None;
@@ -1294,15 +1855,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     renderer.finalize_styled(&style_tool_rows(&rows, true, false, &Theme::default(), mode))?;
                                 }
                                 Some(Progress::ToolFinished { name, output, is_error, duration_ms, .. }) => {
-                                    tool_running = false;
-                                    let width = renderer.size().0.saturating_sub(1).max(20);
-                                    let mut rows = if name == "Agent" && !is_error {
-                                        super::tool_card::completed_agent(&output, renderer.size().0.saturating_sub(1).max(1), &Theme::default(), mode)
-                                    } else {
-                                        let rows = super::tool_card::completed(&name, &output, is_error, duration_ms, width);
-                                        style_tool_rows(&rows, false, is_error || output.contains("[exit code:") || output.contains("[command timed out]"), &Theme::default(), mode)
-                                    };
-                                    rows.push(String::new());
+                                    running_tools = running_tools.saturating_sub(1);
+                                    let rows = completed_tool_rows(&name, &output, is_error, duration_ms, renderer.size().0, &Theme::default(), mode);
                                     renderer.finalize_styled(&rows)?;
                                     status.toast = None;
                                 }
@@ -1354,6 +1908,9 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                             }
                             dirty = true;
                         }
+                        request = questions.recv() => {
+                            if let Some(request) = request { question = Some(super::question_picker::Pending::new(request)); dirty = true; }
+                        }
                         request = approvals.recv() => {
                             if let Some(request) = request {
                                 approval = Some(super::approval_picker::Pending::new(request));
@@ -1363,6 +1920,22 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         event = events.next() => {
                             let Some(event) = event else { return Ok(()); };
                             let event = event?;
+                            if let Some(pending) = &mut question {
+                                if pending.in_chat() {
+                                    match action(event, &mut editor, &mut renderer) {
+                                        Action::Submit(text) => {
+                                            renderer.finalize_styled(&format_user_turn(&text, renderer.size().0, &Theme::default(), mode))?;
+                                            if let Some(pending) = question.take() { pending.finish_chat(text); }
+                                            status.toast = None;
+                                        }
+                                        Action::Interrupt | Action::Exit => { if let Some(pending) = question.take() { pending.finish(false); } }
+                                        _ => {}
+                                    }
+                                } else if let Event::Resize(w, h) = event { renderer.resize(w.into(), h.into()); }
+                                else if let Some(submit) = pending.answer(&event) { if let Some(pending) = question.take() { pending.finish(submit); } }
+                                dirty = true;
+                                continue;
+                            }
                             if let Some(pending) = &mut approval {
                                 if let Event::Resize(w, h) = event {
                                     renderer.resize(w.into(), h.into());
@@ -1401,7 +1974,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                             mode,
                                         ))?;
                                     }
-                                    if tool_running { renderer.finalize("")?; }
+                                    if running_tools > 0 { renderer.finalize("")?; }
                                     while let Ok(event) = progress.try_recv() {
                                         if let Progress::SteeringApplied { messages: entries } = event {
                                             for entry in &entries {
@@ -1463,13 +2036,19 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         }
                         _ = frames.tick(), if dirty || status.busy => {
                             update_copy_notice(&mut renderer, &mut status, &mut copy_deadline)?;
+                            status.background_jobs = background_count(&background_handles);
                             status.elapsed_secs = started.elapsed().as_secs();
                             status.elapsed_millis = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                             if let Some((deadline, attempt, max_attempts)) = retry_deadline {
                                 let seconds = deadline.saturating_duration_since(Instant::now()).as_millis().div_ceil(1000);
                                 status.retry_notice = Some(format!("Повтор через {seconds}с (попытка {attempt} из {max_attempts})"));
                             }
-                            paint(&mut renderer, &editor, &status, &mut stream, &mut stream_started, tool_running, approval.as_ref(), mode)?;
+                            if let Some(pending) = question.as_ref().filter(|pending| !pending.in_chat()) {
+                                let (width, height) = renderer.size();
+                                renderer.paint_styled(&pending.frame(width.saturating_sub(1), height.saturating_sub(1).max(1), mode))?;
+                            } else {
+                                paint(&mut renderer, &editor, &status, &mut stream, &mut stream_started, running_tools > 0, approval.as_ref(), mode)?;
+                            }
                             dirty = false;
                         }
                     }
@@ -1495,6 +2074,14 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         .map_err(io::Error::other)??;
                     }
                     messages = recovered;
+                }
+                if save_compaction_checkpoint(agent, &persistence, &messages)
+                    .await
+                    .is_err()
+                {
+                    status.toast = Some(
+                        "Не удалось сохранить сжатый контекст; полная история сохранена".into(),
+                    );
                 }
                 if let Some(permission) = pending_permission {
                     agent.tools.permissions.mode = permission;
@@ -1524,6 +2111,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod completion_tests {
     use super::*;
     #[test]
@@ -1575,6 +2163,7 @@ mod completion_tests {
 #[allow(clippy::unwrap_used)]
 mod display_regressions {
     use super::*;
+    use serde_json::json;
     #[test]
     fn leading_blank_stream_chunks_do_not_detach_the_assistant_marker() {
         for mode in [ColorMode::None, ColorMode::TrueColor] {
@@ -1629,6 +2218,28 @@ mod display_regressions {
     }
 
     #[test]
+    fn tool_rows_keep_rose_marker_white_invocation_and_placeholder_output() {
+        use crate::theme::{default_foreground, foreground, ColorMode, Theme};
+        let theme = Theme::default();
+        let rows = crate::tui::tool_card::started("Bash", &json!({"command": "printf hello"}), 80);
+        let styled = style_tool_rows(&rows, true, false, &theme, ColorMode::TrueColor);
+        assert_eq!(
+            styled[0],
+            format!(
+                "{}{}{} Bash(printf hello)",
+                foreground(theme.rose, ColorMode::TrueColor),
+                "●",
+                default_foreground(ColorMode::TrueColor),
+            )
+        );
+        let done = completed_tool_rows("Bash", "hello", false, 5, 80, &theme, ColorMode::TrueColor);
+        assert!(done[0].starts_with(&foreground(theme.placeholder, ColorMode::TrueColor)));
+        assert!(done[0].contains("⎿"));
+        let failed = completed_tool_rows("Bash", "boom", true, 5, 80, &theme, ColorMode::TrueColor);
+        assert!(failed[0].starts_with(&foreground(theme.error, ColorMode::TrueColor)));
+    }
+
+    #[test]
     fn copied_notice_expires_without_changing_other_toasts() {
         let mut renderer = Renderer::new(io::stdout(), 80, 24, ColorMode::None, false);
         let mut status = Status {
@@ -1642,4 +2253,10 @@ mod display_regressions {
         assert_eq!(status.toast.as_deref(), Some("Другое уведомление"));
         assert!(!update_copy_notice(&mut renderer, &mut status, &mut deadline).unwrap());
     }
+}
+
+fn background_count(handles: &std::sync::Mutex<Vec<tokio::task::AbortHandle>>) -> usize {
+    let mut handles = handles.lock().unwrap_or_else(|e| e.into_inner());
+    handles.retain(|handle| !handle.is_finished());
+    handles.len()
 }

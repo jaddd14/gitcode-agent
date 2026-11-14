@@ -32,6 +32,8 @@ pub struct Provider {
     pub protocol: Protocol,
     /// Environment variable containing the key.
     pub api_key_env: String,
+    /// Enable prompt caching on supported official endpoints.
+    pub prompt_cache: bool,
     /// Hard request timeout in seconds.
     pub timeout_seconds: u64,
 }
@@ -43,6 +45,7 @@ impl Default for Provider {
             base_url: "https://api.anthropic.com".into(),
             protocol: Protocol::Anthropic,
             api_key_env: "ANTHROPIC_API_KEY".into(),
+            prompt_cache: true,
             timeout_seconds: 120,
         }
     }
@@ -61,7 +64,7 @@ pub struct Config {
     /// Allow a project to override provider credentials and interpolate environment variables.
     /// This opt-in is accepted only in the user's configuration.
     pub trust_project_config: bool,
-    /// Hard agent iteration limit.
+    /// Hard agent iteration limit; zero disables the limit.
     pub max_turns: u32,
     /// Automatic compaction threshold as a window fraction.
     pub compaction_threshold: f64,
@@ -82,7 +85,7 @@ impl Default for Config {
             model: "claude-opus-5-5".into(),
             provider: Provider::default(),
             trust_project_config: false,
-            max_turns: 50,
+            max_turns: 0,
             compaction_threshold: 0.9,
             context_window: 200_000,
             intro: true,
@@ -118,7 +121,6 @@ impl Config {
                 ),
                 "must be auto, bash, pwsh, powershell, or cmd",
             ),
-            ("max_turns", self.max_turns > 0, "must be positive"),
             (
                 "context_window",
                 self.context_window >= 4096,
@@ -490,8 +492,7 @@ mod tests {
     fn defaults_and_validation() {
         let mut c = Config::default();
         assert!(c.validate(Path::new("test")).is_ok());
-        c.max_turns = 0;
-        assert!(c.validate(Path::new("test")).is_err());
+        assert_eq!(c.max_turns, 0);
         c.max_turns = 1;
         c.compaction_threshold = f64::NAN;
         assert!(c.validate(Path::new("test")).is_err());

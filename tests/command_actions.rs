@@ -99,6 +99,11 @@ async fn command_actions_are_honest_permission_checked_and_isolated() {
     };
     let mut status = Status::default();
     let mut messages = vec![Message::text(Role::Assistant, "Ответ для проверки")];
+    agent.compaction.window = 64_000;
+    let context_card = run("/context", &mut agent, &mut messages, &mut status).await;
+    assert!(context_card.contains("64.0k"), "{context_card}");
+    assert!(!context_card.contains("условный: 200k"));
+    agent.compaction.window = 200_000;
     let copy = run("/copy", &mut agent, &mut messages, &mut status).await;
     assert!(copy.contains("Копирование не выполнено"));
     assert!(status.toast.is_none());
@@ -189,6 +194,14 @@ async fn command_actions_are_honest_permission_checked_and_isolated() {
     .await
     .contains("не изменено"));
     assert_eq!(agent.max_turns, 4);
+    run(
+        "/config max_turns 0",
+        &mut agent,
+        &mut messages,
+        &mut status,
+    )
+    .await;
+    assert_eq!(agent.max_turns, 0);
     run(
         "/permissions ask Write(*)",
         &mut agent,

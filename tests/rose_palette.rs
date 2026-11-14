@@ -170,13 +170,18 @@ fn prompt_chrome_and_text_are_colored_independently() {
             for row in &frame.lines {
                 let styled = tui::widgets::style_frame_row(row, &theme, ColorMode::TrueColor);
                 let buffer = cells(&styled);
-                if row.starts_with(" › ") {
+                if row.starts_with(" › ") && row.ends_with(['│', '|']) {
                     let expected = if input.is_empty() {
                         Some(theme.placeholder)
+                    } else if input.starts_with('/') {
+                        Some(theme.rose)
                     } else {
                         None
                     };
-                    assert_eq!(buffer[3].1, expected);
+                    assert_eq!(
+                        buffer[3].1, expected,
+                        "prompt input: {input:?}, row: {row:?}"
+                    );
                 }
             }
             let mut renderer = Renderer::new(Vec::new(), width + 1, 36, ColorMode::TrueColor, true);

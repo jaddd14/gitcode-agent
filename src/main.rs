@@ -407,6 +407,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         Duration::from_secs(config.provider.timeout_seconds),
         config.provider.protocol,
     )?;
+    client.set_prompt_cache(config.provider.prompt_cache);
     gitcode::effort_preferences::apply(&mut client, &home, &config.model)
         .map_err(|e| format!("cannot load reasoning effort: {e}"))?;
     let mode = if cli.dangerously_skip_permissions {
@@ -507,6 +508,13 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             config.compaction_threshold,
         ),
     };
+    let checkpoint_store = store.clone();
+    let checkpoint_id = session.id.clone();
+    if let Ok(Ok(Some(data))) =
+        tokio::task::spawn_blocking(move || checkpoint_store.load_compaction(&checkpoint_id)).await
+    {
+        agent.compaction.restore(&data, &session.messages);
+    }
     if let Some(prompt) = prompt {
         let format = OutputFormat::parse(&cli.output_format)?;
         if format == OutputFormat::StreamJson {
@@ -568,11 +576,15 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             Err(error) => {
                 let recovered = checkpoint.failed(&partial);
                 let appended = recovered[committed..].to_vec();
+                let compacted = agent.compaction.snapshot(&recovered).ok().flatten();
                 let id = session.id.clone();
                 let store = store.clone();
                 tokio::task::spawn_blocking(move || {
                     for message in appended {
                         store.append(&id, &message)?;
+                    }
+                    if let Some(data) = compacted {
+                        let _ = store.save_compaction(&id, &data);
                     }
                     Ok::<_, std::io::Error>(())
                 })
@@ -589,6 +601,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
         let ledger_provider = config.provider.name.clone();
         let ledger_model = config.model.clone();
         let request_usage = outcome.request_usage.clone();
+        let compacted = agent.compaction.snapshot(&outcome.messages).ok().flatten();
         tokio::task::spawn_blocking(move || {
             gitcode::usage::record_turn(
                 &ledger_home,
@@ -600,6 +613,9 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             )?;
             for message in appended {
                 store.append(&id, &message)?;
+            }
+            if let Some(data) = compacted {
+                let _ = store.save_compaction(&id, &data);
             }
             Ok::<_, std::io::Error>(())
         })

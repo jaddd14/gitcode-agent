@@ -77,6 +77,41 @@ async fn read_search_and_deny_rules() {
 }
 
 #[tokio::test]
+async fn sensitive_files_are_not_exposed_by_native_reads_or_search() {
+    let root = tempfile::tempdir().unwrap();
+    for path in [".env", ".env.production", "private.key", "credentials.toml"] {
+        std::fs::write(root.path().join(path), "fixture-secret-marker").unwrap();
+    }
+    std::fs::write(root.path().join("visible.txt"), "ordinary-marker").unwrap();
+    let mut tools = Tools::new(Engine::new(root.path(), Mode::Default).unwrap());
+    for path in [".env", ".env.production", "private.key", "credentials.toml"] {
+        assert!(tools.execute("Read", &json!({"path": path})).await.is_err());
+    }
+    assert!(!tools
+        .execute("Grep", &json!({"pattern":"fixture-secret-marker"}))
+        .await
+        .unwrap()
+        .contains("fixture-secret-marker"));
+    assert!(tools
+        .execute("Read", &json!({"path":"visible.txt"}))
+        .await
+        .is_ok());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(".env", root.path().join("alias.txt")).unwrap();
+        assert!(tools
+            .execute("Read", &json!({"path":"alias.txt"}))
+            .await
+            .is_err());
+    }
+    tools.permissions.mode = Mode::Bypass;
+    assert!(tools
+        .execute("Read", &json!({"path":".env"}))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn edits_are_guarded_and_connected_to_native_executor() {
     let root = std::env::temp_dir().join(format!("gitcode-tools-edit-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();

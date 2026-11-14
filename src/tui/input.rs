@@ -111,7 +111,14 @@ impl Editor {
     }
     /// Load history supplied by a persistence layer, oldest first.
     pub fn set_history(&mut self, history: Vec<String>) {
-        self.history = history;
+        self.history = history
+            .into_iter()
+            .rev()
+            .take(100)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         self.history_at = None;
     }
     /// Expose session history for a persistence layer.
@@ -235,6 +242,7 @@ impl Editor {
         };
         let text = self.history[next].clone();
         self.set_text(&text);
+        self.completion_closed = true;
         self.history_at = Some(next);
     }
     /// Apply one terminal event and return an orchestration action immediately.
@@ -339,8 +347,11 @@ impl Editor {
                     return Action::None;
                 }
                 let text = std::mem::take(&mut self.text);
-                if self.history.last() != Some(&text) {
+                if !text.is_empty() {
                     self.history.push(text.clone());
+                    if self.history.len() > 100 {
+                        self.history.remove(0);
+                    }
                 }
                 self.cursor = 0;
                 self.pastes.clear();

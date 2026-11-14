@@ -64,7 +64,7 @@ We follow **coordinated vulnerability disclosure**. Once a fix is verified and r
      - `Default`: allows `ReadOnly` inside the workspace and requires approval (`Ask`) for workspace writes, shell execution, and network access.
      - `AcceptEdits`: permits workspace file edits while still gating shell execution and external paths.
      - `Yolo` (`--dangerously-skip-permissions`): bypasses interactive prompts unless an explicit `Deny` rule matches.
-   - Sensitive credential locations (`.env`, `.env.*`, `*.pem`, `*.key`, `~/.ssh/**`, `~/.aws/**`, `credentials.toml`) are protected by built-in guardrails.
+   - Native file tools deny paths containing `.env`, `.env.*`, `*.pem`, `*.key`, `.ssh`, `.aws`, or `credentials.toml`, including resolved read paths. This remains active in bypass mode. Other filenames can still contain secrets; approved shell commands and external processes are not confined by these rules.
 
 2. **Workspace Path Confinement (`src/tools/mod.rs`, `src/session/memory.rs`)**
    - Built-in file inspection, editing, and hierarchical `GITCODE.md`/`CLAUDE.md`/`AGENTS.md` `@import` expansion resolve paths against the canonical workspace root.
@@ -76,7 +76,7 @@ We follow **coordinated vulnerability disclosure**. Once a fix is verified and r
 
 4. **Private Storage & Secret Redaction (`src/credentials.rs`, `src/logging.rs`, `src/session/store.rs`)**
    - Credentials (`credentials.toml`) and session JSONL stores are written with `0700` directory modes and `0600` file modes on Unix.
-   - Structured logs automatically redact `sk-*`, `Bearer *`, `api_key`, `authorization`, and `x-api-key` fields before touching disk.
+   - Structured diagnostic logs redact registered credentials and recognizable `sk-*`, `Bearer`, `api_key`, `authorization`, and `x-api-key` forms. This is best effort, not a guarantee that arbitrary secrets are detected. Sessions and tool output may contain sensitive information.
 
 ### Honest Limitations
 

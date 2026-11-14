@@ -195,6 +195,23 @@ pub(crate) fn style_live_row(row: &str, theme: &Theme, mode: ColorMode, elapsed_
             reset(mode)
         );
     }
+    if row.contains(" ток/с │ ") && row.contains(" в фоне") {
+        if let Some((before, rest)) = row.split_once(" ток/с │ ") {
+            if let Some(end) = rest.find(" в фоне") {
+                let end = end + " в фоне".len();
+                return format!(
+                    "{}{} ток/с │ {}{}{}{}{}",
+                    foreground(theme.placeholder, mode),
+                    before,
+                    foreground(theme.warn, mode),
+                    &rest[..end],
+                    foreground(theme.placeholder, mode),
+                    &rest[end..],
+                    reset(mode)
+                );
+            }
+        }
+    }
     style_frame_row(&row, theme, mode)
 }
 
@@ -343,6 +360,18 @@ pub fn style_frame_row_with_panel(
             .chars()
             .any(|ch| (0xE000..0xE400).contains(&(ch as u32)));
     let header_columns = !framed && header_row && (row.contains(" │ ") || row.contains(" | "));
+    let command_span = if prompt_edge {
+        row.find("/")
+            .filter(|&index| row[..index].trim() == "›" || row[..index].trim() == ">")
+            .map(|start| {
+                let end = row[start..]
+                    .find(|c: char| c.is_whitespace() || c == '│' || c == '|')
+                    .map_or(row.len(), |n| start + n);
+                (start, end)
+            })
+    } else {
+        None
+    };
     let output_span = output_token_span(&row);
     let placeholder_start = if row.contains(" › Спроси, или / для команд")
         || row.contains(" > Спроси, или / для команд")
@@ -374,6 +403,14 @@ pub fn style_frame_row_with_panel(
         if let Some(pixel) = logo_pixel(ch, theme, mode) {
             styled.push_str(&pixel);
             continue;
+        }
+        if let Some((start, end)) = command_span {
+            if index == start {
+                styled.push_str(&foreground(theme.rose, mode));
+            }
+            if index == end {
+                styled.push_str(&row_text);
+            }
         }
         if let Some((start, end)) = output_span {
             if index == start {

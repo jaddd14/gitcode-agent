@@ -91,6 +91,7 @@ impl Pending {
                 mode,
             ));
         }
+        lines.push(String::new());
         let similar = self.request.prefix.as_ref().map_or_else(
             || "2. Похожие команды недоступны".to_owned(),
             |prefix| format!("2. Похожие: {prefix} … (до конца чата)"),
@@ -117,6 +118,7 @@ impl Pending {
                 ));
             }
         }
+        lines.push(String::new());
         lines.push(picker::text(
             "  ↑↓ выбрать   enter подтвердить   esc отказ",
             width,
@@ -200,6 +202,7 @@ impl Pending {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
@@ -215,6 +218,24 @@ mod tests {
     }
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn command_options_and_hint_have_spacing_when_height_allows() {
+        let p = pending("git status", Some("git status"));
+        let lines = p.frame(80, 12, ColorMode::None).lines;
+        assert!(lines[1].contains("git status"));
+        assert!(lines[2].is_empty());
+        assert!(lines[3].contains("1. Да"));
+        assert!(lines[6].is_empty());
+        assert!(lines[7].contains("enter подтвердить"));
+        for height in 7..=12 {
+            let lines = p.frame(80, height, ColorMode::None).lines;
+            assert!(lines.len() <= height);
+            assert!(lines.iter().any(|line| line.contains("git status")));
+            assert!(lines.iter().any(|line| line.contains("› 3. Нет")));
+            assert!(lines.last().unwrap().contains("enter подтвердить"));
+        }
     }
 
     #[test]

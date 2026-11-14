@@ -224,7 +224,7 @@ pub fn completed_agent(
         if mode != crate::theme::ColorMode::None {
             body = format!(
                 "{}{body}{}",
-                crate::theme::foreground(theme.panel_text, mode),
+                crate::theme::foreground(theme.placeholder, mode),
                 crate::theme::reset(mode)
             );
         }
@@ -242,7 +242,7 @@ pub fn completed_agent(
         } else {
             format!(
                 "{}{row}{}",
-                crate::theme::foreground(theme.panel_text, mode),
+                crate::theme::foreground(theme.placeholder, mode),
                 crate::theme::reset(mode)
             )
         });
@@ -344,7 +344,7 @@ mod tests {
             .iter()
             .any(|row| row.contains("**") || row.contains('`') || row.contains("\x1b[31m")));
         assert!(rows[0].starts_with(&crate::theme::foreground(
-            theme.panel_text,
+            theme.placeholder,
             ColorMode::TrueColor
         )));
         assert!(plain(&rows[3]).contains("2 more lines"));

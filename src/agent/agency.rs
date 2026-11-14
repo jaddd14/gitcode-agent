@@ -672,6 +672,9 @@ pub struct QuestionItem {
     pub question: String,
     /// Available choices (between 1 and 4).
     pub options: Vec<QuestionOption>,
+    /// Allow selecting several options.
+    #[serde(default)]
+    pub multi_select: bool,
 }
 
 /// Resolved user answer to a [`QuestionItem`].
@@ -769,7 +772,16 @@ impl QuestionPrompt {
                     .to_string();
                 options.push(QuestionOption { label, description });
             }
-            questions.push(QuestionItem { question, options });
+            let multi_select = q_obj
+                .get("multiSelect")
+                .or_else(|| q_obj.get("multi_select"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            questions.push(QuestionItem {
+                question,
+                options,
+                multi_select,
+            });
         }
 
         Ok(Self { questions })

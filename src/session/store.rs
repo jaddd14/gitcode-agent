@@ -124,6 +124,122 @@ impl SessionStore {
         self.create_with_messages(title.into(), branch, None, &[])
     }
 
+    /// Create a session and retain its original journal in a private companion file.
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn import(
+        &self,
+        title: impl Into<String>,
+        messages: &[Message],
+        original: &[u8],
+    ) -> io::Result<Session> {
+        let session = self.create_with_messages(title.into(), None, None, messages)?;
+        let source_path = self.directory.join(format!("{}.source", session.id));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        private_mode(&mut options);
+        let source = match options.open(&source_path) {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = fs::remove_file(self.path(&session.id)?);
+                return Err(error);
+            }
+        };
+        let result = (|| {
+            let mut source = source;
+            source.write_all(original)?;
+            source.sync_all()?;
+            #[cfg(unix)]
+            File::open(&self.directory)?.sync_all()?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&source_path);
+            let _ = fs::remove_file(self.path(&session.id)?);
+            return Err(error);
+        }
+        Ok(session)
+    }
+
+    pub(crate) fn read_provenance(&self, id: &str) -> io::Result<Vec<u8>> {
+        self.check_directory()?;
+        let path = self.path(id)?.with_extension("provenance");
+        reject_symlinks(&path)?;
+        check_private(&path, false)?;
+        let mut options = OpenOptions::new();
+        options.read(true);
+        no_follow(&mut options);
+        let file = options.open(path)?;
+        check_file(&file)?;
+        if file.metadata()?.len() > 1024 * 1024 {
+            return Err(invalid("provenance exceeds byte limit"));
+        }
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    pub(crate) fn write_provenance(&self, id: &str, bytes: &[u8]) -> io::Result<()> {
+        self.check_directory()?;
+        let path = self.path(id)?.with_extension("provenance");
+        reject_symlinks(&path)?;
+        let temporary = self.directory.join(format!(
+            "{id}-{}.tmp",
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        private_mode(&mut options);
+        let mut file = options.open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(temporary, path)?;
+        #[cfg(unix)]
+        File::open(&self.directory)?.sync_all()?;
+        Ok(())
+    }
+
+    /// Load the optional compacted-context checkpoint for an existing session.
+    pub fn load_compaction(&self, id: &str) -> io::Result<Option<Vec<u8>>> {
+        let session = self.open_file(id)?;
+        session.lock_shared()?;
+        let path = self.path(id)?.with_extension("compaction");
+        reject_symlinks(&path)?;
+        let mut options = OpenOptions::new();
+        options.read(true);
+        no_follow(&mut options);
+        let file = match options.open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        check_file(&file)?;
+        if file.metadata()?.len() > 1024 * 1024 {
+            return Err(invalid("compaction checkpoint exceeds byte limit"));
+        }
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        Ok(Some(bytes))
+    }
+
+    /// Atomically save a private compacted-context checkpoint beside the full journal.
+    pub fn save_compaction(&self, id: &str, bytes: &[u8]) -> io::Result<()> {
+        if bytes.len() > 1024 * 1024 {
+            return Err(invalid("compaction checkpoint exceeds byte limit"));
+        }
+        let session = self.open_file(id)?;
+        session.lock()?;
+        let path = self.path(id)?.with_extension("compaction");
+        reject_symlinks(&path)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
+        check_file(temporary.as_file())?;
+        temporary.write_all(bytes)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path).map_err(|error| error.error)?;
+        #[cfg(unix)]
+        File::open(&self.directory)?.sync_all()?;
+        Ok(())
+    }
+
     /// Recover complete records. A newline-free or corrupt header is not fabricated.
     pub fn resume(&self, id: &str) -> io::Result<Session> {
         let mut file = self.open_file(id)?;
@@ -512,7 +628,7 @@ pub(crate) fn reject_symlinks(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn private_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn private_directory(path: &Path) -> io::Result<()> {
     reject_symlinks(path)?;
     let builder = fs::DirBuilder::new();
     #[cfg(unix)]
@@ -530,7 +646,7 @@ fn private_directory(path: &Path) -> io::Result<()> {
     check_private(path, true)
 }
 
-fn check_private(path: &Path, directory: bool) -> io::Result<()> {
+pub(crate) fn check_private(path: &Path, directory: bool) -> io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink()
         || (if directory {
@@ -552,7 +668,7 @@ fn check_private(path: &Path, directory: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn check_file(file: &File) -> io::Result<()> {
+pub(crate) fn check_file(file: &File) -> io::Result<()> {
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(invalid("session must be a regular file"));
@@ -567,7 +683,7 @@ fn check_file(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-fn private_mode(options: &mut OpenOptions) {
+pub(crate) fn private_mode(options: &mut OpenOptions) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -576,7 +692,7 @@ fn private_mode(options: &mut OpenOptions) {
     no_follow(options);
 }
 
-fn no_follow(options: &mut OpenOptions) {
+pub(crate) fn no_follow(options: &mut OpenOptions) {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::OpenOptionsExt;

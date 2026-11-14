@@ -80,6 +80,7 @@ fn guard_restoration_uses_detected_extensions() {
         let output = String::from_utf8_lossy(&bytes);
         assert_eq!(output.contains("\x1b[?2026l"), synchronized_output);
         assert!(!output.contains("\x1b[<u"));
+        assert!(!output.contains("\x1b[>"));
         assert!(!*backend.raw.lock().unwrap());
     }
 }
@@ -98,7 +99,8 @@ fn guard_pops_keyboard_only_after_successful_push() {
     );
     let bytes = backend.bytes.lock().unwrap();
     let output = String::from_utf8_lossy(&bytes);
-    assert!(output.contains("\x1b[>1u"));
+    assert_eq!(output.matches("\x1b[>1u").count(), 1);
+    assert!(!output.contains("\x1b[>3u"));
     assert!(output.contains("\x1b[<u"));
 
     struct RejectKeyboard(Backend);
@@ -610,4 +612,21 @@ fn unix_termination_signals_restore_before_default_exit() {
         assert_eq!(output, format!("{START}{RESTORE}COOKED"));
         std::fs::remove_file(path).unwrap();
     }
+}
+
+#[test]
+fn history_navigation_continues_past_recalled_slash_commands() {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use gitcode::tui::input::Editor;
+    let mut editor = Editor::default();
+    editor.set_history(vec!["older prompt".into(), "/help".into()]);
+    let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+    editor.handle(key(KeyCode::Up));
+    assert_eq!(editor.text(), "/help");
+    editor.handle(key(KeyCode::Up));
+    assert_eq!(editor.text(), "older prompt");
+    editor.handle(key(KeyCode::Down));
+    assert_eq!(editor.text(), "/help");
+    editor.handle(key(KeyCode::Down));
+    assert_eq!(editor.text(), "");
 }

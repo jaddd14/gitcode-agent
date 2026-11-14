@@ -29,6 +29,8 @@ pub struct Status {
     pub cache_write: u64,
     /// Current generation speed; absent when not measured.
     pub tokens_per_second: Option<f64>,
+    /// Number of currently running background shell commands.
+    pub background_jobs: usize,
     /// Context occupancy in percent; absent until known.
     pub context_percent: Option<f64>,
     /// Accumulated dollar cost; absent for unknown pricing.
@@ -120,7 +122,11 @@ impl Status {
             ),
             format!("кэш {}", compact(self.cache_read)),
             format!("{rate} ток/с"),
-            cost,
+            if self.background_jobs == 0 {
+                cost
+            } else {
+                format!("{} в фоне", self.background_jobs)
+            },
         ];
         let budget = width.saturating_sub(right.width() + 1);
         let mut left = String::new();

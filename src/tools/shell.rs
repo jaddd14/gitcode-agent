@@ -492,6 +492,7 @@ impl Session {
             capture,
             cancel: Some(cancel),
             task: Some(task),
+            result: None,
         })
     }
 
@@ -612,6 +613,7 @@ pub struct Job {
     capture: Arc<Mutex<Capture>>,
     cancel: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<Result<Output, String>>>,
+    result: Option<Result<Output, String>>,
 }
 impl Job {
     /// Read bytes not returned by earlier polls (lossy UTF-8, possibly split across polls).
@@ -626,8 +628,40 @@ impl Job {
     pub fn is_finished(&self) -> bool {
         self.task.as_ref().is_none_or(|task| task.is_finished())
     }
+    /// A handle for observing completion without consuming the job.
+    pub fn completion_handle(&self) -> Option<tokio::task::AbortHandle> {
+        self.task
+            .as_ref()
+            .map(tokio::task::JoinHandle::abort_handle)
+    }
+    /// Wait up to the specified duration without consuming the job or its output.
+    pub async fn wait_ready(&mut self, duration: Duration) {
+        if let Some(task) = self.task.as_mut() {
+            if let Ok(result) = tokio::time::timeout(duration, task).await {
+                self.result = Some(result.unwrap_or_else(|_| Err("shell worker failed".into())));
+                self.task.take();
+                self.cancel.take();
+            }
+        }
+    }
+    /// Describe the final outcome after completion has been collected.
+    pub fn completion_status(&self) -> Option<String> {
+        self.result.as_ref().map(|result| match result {
+            Ok(output) if output.timed_out => "timed out".to_string(),
+            Ok(output) => format!(
+                "exit_code={}",
+                output
+                    .exit_code
+                    .map_or_else(|| "unknown".to_string(), |code| code.to_string())
+            ),
+            Err(error) => format!("error: {error}"),
+        })
+    }
     /// Wait for completion and receive the full bounded output, including previously polled bytes.
     pub async fn wait(mut self) -> Result<Output, String> {
+        if let Some(result) = self.result.take() {
+            return result;
+        }
         let result = self
             .task
             .as_mut()

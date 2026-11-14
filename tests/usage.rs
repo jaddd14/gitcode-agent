@@ -135,3 +135,25 @@ fn ledger_rejects_link_substitution_and_non_private_files() {
     assert!(UsageLedger::open(&home).is_err());
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+fn cache_hit_rate_includes_cache_writes_in_the_input_total() {
+    let entry = UsageEntry {
+        timestamp_ms: 1,
+        session_id: "s".into(),
+        project: "p".into(),
+        provider: "test".into(),
+        model: "test".into(),
+        agent: "main".into(),
+        input_tokens: 100,
+        output_tokens: 0,
+        cache_read_tokens: 100,
+        cache_write_tokens: 200,
+        reasoning_tokens: 0,
+        estimated: false,
+        cost_usd: None,
+        latency_ms: 1,
+        tokens_per_sec: 0.0,
+    };
+    assert_eq!(UsageSummary::from_entries(&[entry]).cache_hit_rate, 0.25);
+}

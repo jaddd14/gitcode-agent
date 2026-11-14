@@ -108,7 +108,7 @@ async fn children_run_in_parallel_with_isolated_context_and_enforced_read_only_t
         tools: Tools::new(Engine::new(&root, Mode::Bypass).unwrap()),
         model: "mock".into(),
         system: BASE_PROMPT.into(),
-        max_turns: 4,
+        max_turns: 0,
         max_tokens: 128,
         compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
     };
@@ -256,4 +256,215 @@ async fn interrupt_keeps_completed_child_and_marks_only_the_unfinished_child() {
     );
     server.await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn steering_reaches_parent_while_subagent_is_running() {
+    use gitcode::agent::InputQueue;
+    use tokio::sync::{mpsc, Notify};
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let release_child = Arc::new(Notify::new());
+    let (child_started_tx, mut child_started_rx) = mpsc::channel::<()>(1);
+    let (steering_seen_tx, mut steering_seen_rx) = mpsc::channel::<()>(1);
+    let (parent_wait_tx, mut parent_wait_rx) = mpsc::channel::<()>(1);
+    let release = release_child.clone();
+    let server = tokio::spawn(async move {
+        let mut workers = Vec::new();
+        for _ in 0..5 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let release = release.clone();
+            let child_started_tx = child_started_tx.clone();
+            let steering_seen_tx = steering_seen_tx.clone();
+            let parent_wait_tx = parent_wait_tx.clone();
+            workers.push(tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                let mut buf = [0; 8192];
+                let body: serde_json::Value = loop {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buf[..n]);
+                    if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                        let len = String::from_utf8_lossy(&bytes[..end]).lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length: ").and_then(|v| v.parse::<usize>().ok())).unwrap();
+                        if bytes.len() >= end + 4 + len { break serde_json::from_slice(&bytes[end+4..end+4+len]).unwrap(); }
+                    }
+                };
+                let messages = body["messages"].to_string();
+                let response = if messages.contains("CHILD_TASK") && !messages.contains("PARENT_TASK") {
+                    child_started_tx.send(()).await.unwrap();
+                    release.notified().await;
+                    text_reply("child completed report")
+                } else if messages.contains("child completed report") {
+                    text_reply("final with child report")
+                } else if messages.contains("USER_STEERING") {
+                    steering_seen_tx.send(()).await.unwrap();
+                    text_reply("steering received while child runs")
+                } else if messages.contains("запущен в фоне") {
+                    parent_wait_tx.send(()).await.unwrap();
+                    text_reply("waiting for child")
+                } else {
+                    tool_reply(&[("child-1", "Agent", serde_json::json!({"subagent_type":"explore","description":"inspect","prompt":"CHILD_TASK"}))])
+                };
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+            }));
+        }
+        for worker in workers {
+            worker.await.unwrap();
+        }
+    });
+    let client = Client::new(
+        &format!("http://{address}"),
+        None,
+        false,
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let mut agent = Agent {
+        client,
+        tools: Tools::new(Engine::new(root.path(), Mode::Bypass).unwrap()),
+        model: "mock".into(),
+        system: BASE_PROMPT.into(),
+        max_turns: 8,
+        max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
+    };
+    let queue = InputQueue::default();
+    let (progress_tx, mut progress_rx) = mpsc::channel(128);
+    let receiver_queue = queue.clone();
+    let receiver = tokio::spawn(async move {
+        while let Some(event) = progress_rx.recv().await {
+            if matches!(event, Event::SteeringApplied { .. }) {
+                receiver_queue.acknowledge();
+            }
+        }
+    });
+    let run_queue = queue.clone();
+    let run = tokio::spawn(async move {
+        agent
+            .run_with_steering(
+                vec![Message::text(Role::User, "PARENT_TASK")],
+                Some(&progress_tx),
+                None,
+                Some(&run_queue),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), child_started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), parent_wait_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    queue.push_back("USER_STEERING".into());
+    tokio::time::timeout(Duration::from_secs(5), steering_seen_rx.recv())
+        .await
+        .expect("parent must receive steering before child is released")
+        .unwrap();
+    release_child.notify_one();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome.text, "final with child report");
+    assert!(outcome
+        .messages
+        .iter()
+        .any(|m| m.content.iter().any(
+            |c| matches!(c, Content::Text { text } if text.contains("child completed report"))
+        )));
+    server.await.unwrap();
+    receiver.await.unwrap();
+}
+
+#[tokio::test]
+async fn parallel_reads_preserve_result_order_and_edit_guards() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("a.txt"), "alpha").unwrap();
+    std::fs::write(root.path().join("b.txt"), "beta").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for turn in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0; 8192];
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                    let len = String::from_utf8_lossy(&bytes[..end])
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|v| v.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let response = if turn == 0 {
+                tool_reply(&[
+                    ("r1", "Read", serde_json::json!({"path":"a.txt"})),
+                    ("r2", "Read", serde_json::json!({"path":"b.txt"})),
+                    (
+                        "e1",
+                        "Edit",
+                        serde_json::json!({"path":"a.txt","old_string":"alpha","new_string":"changed"}),
+                    ),
+                    (
+                        "e2",
+                        "Edit",
+                        serde_json::json!({"path":"b.txt","old_string":"beta","new_string":"changed too"}),
+                    ),
+                ])
+            } else {
+                text_reply("done")
+            };
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+        }
+    });
+    let client = Client::new(
+        &format!("http://{address}"),
+        None,
+        false,
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let mut agent = Agent {
+        client,
+        tools: Tools::new(Engine::new(root.path(), Mode::Bypass).unwrap()),
+        model: "mock".into(),
+        system: BASE_PROMPT.into(),
+        max_turns: 4,
+        max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
+    };
+    let outcome = agent
+        .run(vec![Message::text(Role::User, "read and edit")], None)
+        .await
+        .unwrap();
+    let results = &outcome.messages[2].content;
+    assert_eq!(results.len(), 4);
+    for (result, expected) in results.iter().zip(["r1", "r2", "e1", "e2"]) {
+        assert!(
+            matches!(result, Content::ToolResult { tool_use_id, is_error: false, .. } if tool_use_id == expected)
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("a.txt")).unwrap(),
+        "changed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("b.txt")).unwrap(),
+        "changed too"
+    );
+    server.await.unwrap();
 }

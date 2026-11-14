@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -28,6 +29,7 @@ pub struct Tools {
     jobs: BTreeMap<String, shell::Job>,
     /// Monotonic counter for background shell job identifiers.
     next_job_id: u64,
+    job_handles: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
     todos: crate::agent::agency::TodoList,
     approved_shell_prefixes: Vec<String>,
     shell_selection: String,
@@ -42,10 +44,16 @@ impl Tools {
             shell_session: None,
             jobs: BTreeMap::new(),
             next_job_id: 1,
+            job_handles: Arc::new(Mutex::new(Vec::new())),
             todos: crate::agent::agency::TodoList::new(),
             approved_shell_prefixes: Vec::new(),
             shell_selection: "auto".into(),
         }
+    }
+
+    /// Shared completion handles for reporting active background jobs.
+    pub fn background_handles(&self) -> Arc<Mutex<Vec<tokio::task::AbortHandle>>> {
+        self.job_handles.clone()
     }
 
     /// Stop owned background jobs and reap the persistent interpreter before
@@ -112,14 +120,14 @@ impl Tools {
             ),
             tool(
                 "Bash",
-                "Execute a command in a persistent non-interactive Bash session.",
-                json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1},"run_in_background":{"type":"boolean"}}),
+                "Execute a command in a persistent non-interactive shell. Long commands yield a job ID after yield_time_ms; use BashOutput to await the result. Explicit background commands use a separate shell.",
+                json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1},"yield_time_ms":{"type":"integer","minimum":1,"maximum":60000},"run_in_background":{"type":"boolean"}}),
                 &["command"],
             ),
             tool(
                 "BashOutput",
-                "Read incremental output from a background shell job.",
-                json!({"job_id":{"type":"string"},"filter":{"type":"string"}}),
+                "Read incremental output from a background job. Set wait_ms to wait for completion without running sleep; use a bounded wait and continue other useful work while it runs.",
+                json!({"job_id":{"type":"string"},"filter":{"type":"string"},"wait_ms":{"type":"integer","minimum":1,"maximum":60000}}),
                 &["job_id"],
             ),
             tool(
@@ -322,13 +330,38 @@ impl Tools {
                         .await?;
                     let job_id = format!("job-{}", self.next_job_id);
                     self.next_job_id += 1;
+                    if let Some(handle) = job.completion_handle() {
+                        self.job_handles
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(handle);
+                    }
                     self.jobs.insert(job_id.clone(), job);
                     return Ok(format!("Started background shell job {job_id}"));
                 }
                 let session = self.ensure_shell()?;
-                let out = session
-                    .execute(&shell_permissions, command, timeout)
+                let mut job = session
+                    .background(&shell_permissions, command, timeout)
                     .await?;
+                let wait = input["yield_time_ms"]
+                    .as_u64()
+                    .unwrap_or(1000)
+                    .clamp(1, 60_000);
+                job.wait_ready(Duration::from_millis(wait)).await;
+                if !job.is_finished() {
+                    let initial = job.poll()?;
+                    let job_id = format!("job-{}", self.next_job_id);
+                    self.next_job_id += 1;
+                    if let Some(handle) = job.completion_handle() {
+                        self.job_handles
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(handle);
+                    }
+                    self.jobs.insert(job_id.clone(), job);
+                    return Ok(bound(format!("Command continues as background shell job {job_id}. Use BashOutput to wait for its result.\n{initial}")));
+                }
+                let out = job.wait().await?;
                 let mut text = out.output;
                 if out.timed_out {
                     text.push_str("\n[command timed out]");
@@ -348,8 +381,18 @@ impl Tools {
                     .jobs
                     .get_mut(job_id)
                     .ok_or_else(|| format!("unknown background job: {job_id}"))?;
+                if let Some(ms) = input["wait_ms"].as_u64() {
+                    job.wait_ready(Duration::from_millis(ms.clamp(1, 60_000)))
+                        .await;
+                }
+                if job.is_finished() {
+                    job.wait_ready(Duration::from_millis(1)).await;
+                }
                 let chunk = job.poll()?;
                 let finished = job.is_finished();
+                let outcome = job
+                    .completion_status()
+                    .map_or_else(String::new, |s| format!(" {s}"));
                 let filtered = if let Some(pattern) = input["filter"].as_str() {
                     let re = regex::RegexBuilder::new(pattern)
                         .size_limit(4 * 1024 * 1024)
@@ -363,7 +406,7 @@ impl Tools {
                 } else {
                     chunk
                 };
-                return Ok(bound(format!("finished={finished}\n{filtered}")));
+                return Ok(bound(format!("finished={finished}{outcome}\n{filtered}")));
             }
             "KillShell" => {
                 let job_id = required(input, "job_id")?;

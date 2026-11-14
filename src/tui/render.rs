@@ -217,7 +217,7 @@ impl Frame {
             };
             lines.push(clip(
                 &format!(
-                    "  {mark} {} · {} · {state} · {} ток",
+                    "  {mark} {} · {} · {state} · {}↓",
                     super::plain(&run.name),
                     super::plain(&run.task),
                     super::statusbar::compact(run.tokens)
@@ -331,6 +331,12 @@ impl<W: Write> Renderer<W> {
         if let Some(viewport) = &mut self.viewport {
             viewport.mouse(event);
         }
+    }
+    /// Whether the viewport has another scrolling animation frame.
+    pub fn scroll_pending(&self) -> bool {
+        self.viewport
+            .as_ref()
+            .is_some_and(super::viewport::Viewport::scroll_pending)
     }
     /// Copy a settled selection to terminals supporting OSC 52.
     pub fn copy_selection_if_due(&mut self) -> io::Result<Option<usize>> {
@@ -1040,7 +1046,7 @@ mod subagent_spinner_tests {
             assert_eq!(subagent_spinner(ms, false), *glyph);
             assert_eq!(subagent_spinner(ms + 349, false), *glyph);
             assert_eq!(glyph.width(), 1);
-            let row = format!("  {glyph} explore · task · Думает · 0 ток");
+            let row = format!("  {glyph} explore · task · Думает · 0↓");
             let styled =
                 super::super::widgets::style_live_row(&row, &theme, ColorMode::TrueColor, ms);
             assert!(styled.starts_with(&format!("  {rose}{glyph}")));

@@ -290,7 +290,10 @@ impl UsageSummary {
         if s.requests > 0 {
             s.avg_tokens_per_sec = tps_sum / s.requests as f64;
         }
-        let denom = s.input_tokens + s.cache_read_tokens;
+        let denom = s
+            .input_tokens
+            .saturating_add(s.cache_read_tokens)
+            .saturating_add(s.cache_write_tokens);
         if denom > 0 {
             s.cache_hit_rate = s.cache_read_tokens as f64 / denom as f64;
         }

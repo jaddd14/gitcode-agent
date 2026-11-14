@@ -780,7 +780,8 @@ fn paint(spans: &[Span], theme: &Theme, mode: ColorMode) -> String {
             continue;
         }
         match s.role {
-            Role::Text | Role::Bold => out.push_str(default_foreground(mode)),
+            Role::Text => out.push_str(default_foreground(mode)),
+            Role::Bold => out.push_str(&foreground(theme.rose, mode)),
             Role::Italic => out.push_str(&foreground(theme.rose_soft, mode)),
             Role::Heading | Role::Marker | Role::Link => {
                 out.push_str(&foreground(theme.rose, mode))

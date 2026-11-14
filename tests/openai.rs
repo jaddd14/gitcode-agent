@@ -60,7 +60,7 @@ fn every_boundary_chat_and_responses() {
                 r.finish().unwrap();
             }
             assert!(events.iter().any(|e|matches!(e,Event::ToolCall{name,input,..}if name=="Read"&&input["path"]=="src/main.rs")));
-            assert!(events.iter().any(|e|matches!(e,Event::Usage{usage}if usage.input_tokens==12&&usage.output_tokens==8&&usage.cache_read_tokens==4)));
+            assert!(events.iter().any(|e|matches!(e,Event::Usage{usage}if usage.input_tokens==8&&usage.output_tokens==8&&usage.cache_read_tokens==4)));
         }
     }
 }
@@ -157,4 +157,23 @@ async fn both_openai_protocols_use_real_http() {
             .any(|e| matches!(e, Event::ToolCall { .. })));
         server.await.unwrap();
     }
+}
+
+#[test]
+fn responses_incomplete_reasons_are_distinguished_without_accepting_partial_output() {
+    let record = |reason: &str| {
+        Record { event: String::new(), data: serde_json::json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":reason}}}).to_string() }
+    };
+    assert_eq!(
+        openai_responses::Stream::default()
+            .accept(record("max_output_tokens"))
+            .unwrap_err(),
+        "Responses output token limit reached"
+    );
+    assert_eq!(
+        openai_responses::Stream::default()
+            .accept(record("content_filter"))
+            .unwrap_err(),
+        "Responses content filtered"
+    );
 }

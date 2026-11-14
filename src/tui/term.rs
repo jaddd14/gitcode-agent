@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock, Weak};
 
 /// Startup control sequence; never enters an alternate screen or enables a mouse.
-pub const START: &str = "\x1b[2J\x1b[3J\x1b[H\x1b[?25l\x1b[?2004h\x1b[>3u";
+pub const START: &str = "\x1b[2J\x1b[3J\x1b[H\x1b[?25l\x1b[?2004h";
 /// Clear the visible terminal and its scrollback, then home the cursor.
 pub const CLEAR_SCREEN: &str = "\x1b[2J\x1b[3J\x1b[H";
 /// Reset synchronized output, Kitty keyboard stack, paste, style, and cursor.

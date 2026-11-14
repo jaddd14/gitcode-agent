@@ -423,7 +423,10 @@ fn prose_uses_terminal_foreground_while_accent_colors_are_preserved() {
     ] {
         let row = parser.render(100, &theme, mode).join("\n");
         assert!(row.contains("\x1b[39mобычный"));
-        assert!(row.contains("\x1b[39m\x1b[1mжирный"));
+        assert!(row.contains(&format!(
+            "{}\x1b[1mжирный",
+            theme::foreground(theme.rose, mode)
+        )));
         assert!(row.contains(&theme::foreground(theme.rose, mode)));
         assert!(!row.contains(&theme::foreground(theme.text, mode)));
     }

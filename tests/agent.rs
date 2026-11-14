@@ -1,5 +1,5 @@
 //! Scripted model-tool-model conversation over an actual local HTTP endpoint.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use gitcode::{
     agent::{Agent, BASE_PROMPT},
@@ -382,4 +382,262 @@ async fn queued_messages_reach_the_model_after_tools_in_order_without_reexecutio
     );
     server.await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn steering_interrupts_uncommitted_stream_and_preserves_visible_text_without_running_tools() {
+    use gitcode::{
+        agent::{InputQueue, TurnCheckpoint},
+        provider::canonical::Event,
+    };
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    async fn read_request(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
+        let mut data = Vec::new();
+        let mut buffer = [0; 8192];
+        loop {
+            let n = socket.read(&mut buffer).await.unwrap();
+            assert!(n > 0);
+            data.extend_from_slice(&buffer[..n]);
+            if let Some(end) = data.windows(4).position(|part| part == b"\r\n\r\n") {
+                let size = String::from_utf8_lossy(&data[..end])
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|n| n.parse::<usize>().ok())
+                    })
+                    .unwrap();
+                if data.len() >= end + 4 + size {
+                    return serde_json::from_slice(&data[end + 4..end + 4 + size]).unwrap();
+                }
+            }
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let release_first = Arc::new(Notify::new());
+    let release = release_first.clone();
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        let body = read_request(&mut first).await;
+        assert!(body.to_string().contains("original request"));
+        let partial = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"visible partial\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"uncommitted\",\"name\":\"Bash\",\"input\":{\"command\":\"touch should-not-exist\"}}}\n\n"
+        );
+        first.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 999999\r\nConnection: close\r\n\r\n{partial}").as_bytes()).await.unwrap();
+        let (mut second, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .expect("steering must reach the provider before the old stream completes")
+            .unwrap();
+        let next = read_request(&mut second).await.to_string();
+        assert!(
+            next.contains("visible partial")
+                && next.contains("first update")
+                && next.contains("second update"),
+            "{next}"
+        );
+        assert!(next.find("first update").unwrap() < next.find("second update").unwrap());
+        assert!(next.contains("aW1hZ2UtZGF0YQ=="));
+        assert!(
+            !next.contains("should-not-exist"),
+            "unvalidated tool must not enter the conversation"
+        );
+        let done = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"updated answer\"}}\n\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+        second
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{done}",
+                    done.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        release.notified().await;
+        drop(first);
+    });
+    let client = Client::new(
+        &format!("http://{address}"),
+        None,
+        false,
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let mut agent = Agent {
+        client,
+        tools: Tools::new(Engine::new(root.path(), Mode::Bypass).unwrap()),
+        model: "mock".into(),
+        system: BASE_PROMPT.into(),
+        max_turns: 4,
+        max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
+    };
+    let initial = vec![Message::text(Role::User, "original request")];
+    let checkpoint = TurnCheckpoint::new(initial.clone());
+    let queue = InputQueue::default();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let mut run =
+        Box::pin(agent.run_with_steering(initial, Some(&sender), Some(&checkpoint), Some(&queue)));
+    let mut sent = false;
+    let outcome = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            tokio::select! {
+                result = &mut run => break result.unwrap(),
+                event = receiver.recv() => match event.unwrap() {
+                    Event::TextDelta { text } if text.contains("visible partial") && !sent => {
+                        queue.push_back("first update".into());
+                        queue.push_with_image("second update".into(), Some(Content::Image { media_type: "image/png".into(), data: "aW1hZ2UtZGF0YQ==".into() }));
+                        sent = true;
+                    }
+                    Event::SteeringApplied { messages } => {
+                        assert_eq!(messages, ["first update", "second update"]);
+                        let recovered = checkpoint.interrupted("");
+                        assert!(serde_json::to_string(&recovered).unwrap().contains("visible partial"));
+                        queue.acknowledge();
+                    }
+                    Event::ToolStarted { .. } => panic!("uncommitted tool was executed"),
+                    _ => {}
+                }
+            }
+        }
+    }).await.unwrap();
+    assert_eq!(outcome.text, "updated answer");
+    assert!(!root.path().join("should-not-exist").exists());
+    assert!(outcome.usage.estimated);
+    release_first.notify_one();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn steering_interrupts_job_wait_without_killing_background_command() {
+    use gitcode::agent::InputQueue;
+    use gitcode::provider::canonical::Event;
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for turn in 0..3 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut data = Vec::new();
+            let mut buffer = [0; 8192];
+            loop {
+                let n = socket.read(&mut buffer).await.unwrap();
+                assert!(n > 0);
+                data.extend_from_slice(&buffer[..n]);
+                if let Some(end) = data.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let size = String::from_utf8_lossy(&data[..end])
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|n| n.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if data.len() >= end + 4 + size {
+                        if turn == 2 {
+                            let body = String::from_utf8_lossy(&data[end + 4..end + 4 + size]);
+                            assert!(body.contains("new instruction"));
+                            assert!(body.contains("фоновое задание не было остановлено"));
+                        }
+                        break;
+                    }
+                }
+            }
+            let body = match turn {
+                0 => concat!(
+                    "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
+                    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"start\",\"name\":\"Bash\",\"input\":{\"command\":\"sleep 10\",\"run_in_background\":true}}}\n\n",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+                    "data: {\"type\":\"message_stop\"}\n\n"
+                ),
+                1 => concat!(
+                    "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
+                    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"wait\",\"name\":\"BashOutput\",\"input\":{\"job_id\":\"job-1\",\"wait_ms\":60000}}}\n\n",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+                    "data: {\"type\":\"message_stop\"}\n\n"
+                ),
+                _ => concat!(
+                    "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
+                    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"received\"}}\n\n",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+                    "data: {\"type\":\"message_stop\"}\n\n"
+                )
+            };
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+    let client = Client::new(
+        &format!("http://{address}"),
+        None,
+        false,
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let mut agent = Agent {
+        client,
+        tools: Tools::new(Engine::new(root.path(), Mode::Bypass).unwrap()),
+        model: "mock".into(),
+        system: BASE_PROMPT.into(),
+        max_turns: 6,
+        max_tokens: 128,
+        compaction: gitcode::agent::context::Compaction::new(200_000, 0.9),
+    };
+    let queue = InputQueue::default();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
+    let mut run = Box::pin(agent.run_with_steering(
+        vec![Message::text(Role::User, "start")],
+        Some(&sender),
+        None,
+        Some(&queue),
+    ));
+    let outcome = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            tokio::select! {
+                result = &mut run => break result.unwrap(),
+                event = receiver.recv() => match event.unwrap() {
+                    Event::ToolStarted { name, .. } if name == "BashOutput" => queue.push_back("new instruction".into()),
+                    Event::SteeringApplied { .. } => queue.acknowledge(),
+                    _ => {}
+                }
+            }
+        }
+    }).await.expect("steering must not wait for the long command");
+    assert_eq!(outcome.text, "received");
+    drop(run);
+    assert!(agent
+        .tools
+        .background_handles()
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|handle| !handle.is_finished()));
+    agent.tools.shutdown().await.unwrap();
+    server.await.unwrap();
 }

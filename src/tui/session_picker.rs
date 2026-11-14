@@ -64,6 +64,7 @@ fn rows(
     width: usize,
     height: usize,
     mode: ColorMode,
+    heading: &str,
 ) -> Vec<String> {
     let theme = Theme::default();
     let position = if results.is_empty() {
@@ -72,12 +73,7 @@ fn rows(
         format!("{} / {}", selected + 1, results.len())
     };
     let mut out = vec![
-        picker::heading(
-            &format!("  Восстановить чат · {position}"),
-            width,
-            &theme,
-            mode,
-        ),
+        picker::heading(&format!("  {heading} · {position}"), width, &theme, mode),
         picker::text(
             &format!(
                 "  Поиск: {}",
@@ -91,8 +87,9 @@ fn rows(
             theme.panel_text,
             mode,
         ),
+        String::new(),
     ];
-    let capacity = height.saturating_sub(4).max(1);
+    let capacity = height.saturating_sub(6).max(1);
     if results.is_empty() {
         out.push(picker::text(
             "  Ничего не найдено",
@@ -137,6 +134,7 @@ fn rows(
             ));
         }
     }
+    out.push(String::new());
     if let Some(item) = results.get(selected).and_then(|index| sessions.get(*index)) {
         let branch = safe(item.metadata.branch.as_deref().unwrap_or("—"));
         let details = format!(
@@ -195,6 +193,16 @@ pub async fn select(
     events: &mut EventStream,
     sessions: &[SessionSummary],
 ) -> io::Result<Option<String>> {
+    select_with_heading(renderer, events, sessions, "Восстановить чат").await
+}
+
+/// Pick a session with a custom heading.
+pub async fn select_with_heading(
+    renderer: &mut Renderer<io::Stdout>,
+    events: &mut EventStream,
+    sessions: &[SessionSummary],
+    heading: &str,
+) -> io::Result<Option<String>> {
     if sessions.is_empty() {
         return Ok(None);
     }
@@ -210,7 +218,7 @@ pub async fn select(
             selected,
             start,
             results.len(),
-            menu_height.saturating_sub(4),
+            menu_height.saturating_sub(6),
         );
         renderer.paint_styled(&Frame {
             lines: rows(
@@ -222,6 +230,7 @@ pub async fn select(
                 width.saturating_sub(1),
                 menu_height,
                 renderer.color_mode(),
+                heading,
             ),
             cursor: None,
         })?;
@@ -261,10 +270,46 @@ pub async fn select(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::session::store::Metadata;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn search_and_footer_are_separated_from_results() {
+        let sessions = vec![SessionSummary {
+            id: "session-1".into(),
+            metadata: Metadata {
+                title: "Чат".into(),
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                branch: None,
+                forked_from: None,
+            },
+            message_count: 1,
+            interrupted_bytes: 0,
+        }];
+        for results in [vec![0], vec![]] {
+            let lines = rows(
+                &sessions,
+                &results,
+                0,
+                0,
+                "",
+                100,
+                18,
+                ColorMode::None,
+                "Восстановить чат",
+            );
+            assert!(lines[0].contains("Восстановить чат"));
+            assert!(lines[1].contains("Поиск:"));
+            assert!(lines[2].is_empty());
+            assert!(!lines[3].is_empty());
+            assert!(lines[4].is_empty());
+            assert!(lines.last().unwrap().contains("enter открыть"));
+        }
+    }
 
     #[test]
     fn selection_scrolls_filters_and_shows_selected_session_metadata() {
@@ -297,6 +342,7 @@ mod tests {
                 width,
                 18,
                 ColorMode::None,
+                "Восстановить чат",
             );
             let visible = lines.join("\n");
             assert!(visible.contains("Чат 12"));
@@ -317,7 +363,7 @@ mod tests {
         assert_eq!(scroll_start(4, 5, 15, 8), 4);
         for terminal_height in [15, 20, 25, 40] {
             let limit = picker::height(terminal_height);
-            let start = scroll_start(index, 0, results.len(), limit.saturating_sub(4));
+            let start = scroll_start(index, 0, results.len(), limit.saturating_sub(6));
             let compact = rows(
                 &sessions,
                 &results,
@@ -327,6 +373,7 @@ mod tests {
                 80,
                 limit,
                 ColorMode::None,
+                "Восстановить чат",
             );
             assert!(compact.len() <= limit);
             assert!(compact.iter().any(|line| line.contains("› Чат 12")));

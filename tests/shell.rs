@@ -418,3 +418,52 @@ async fn foreground_future_drop_and_independent_sessions() {
     f.session.close().await;
     other.close().await;
 }
+
+#[tokio::test]
+async fn background_wait_reports_failure_without_consuming_output() {
+    let f = Fixture::new(Mode::Bypass);
+    let mut tools = gitcode::tools::Tools::new(f.engine.clone());
+    let started = tools.execute("Bash", &serde_json::json!({"command":"printf job-output; sh -c 'exit 7'", "run_in_background":true})).await.unwrap();
+    let id = started.split_whitespace().last().unwrap();
+    let output = tools
+        .execute(
+            "BashOutput",
+            &serde_json::json!({"job_id":id, "wait_ms":5000}),
+        )
+        .await
+        .unwrap();
+    assert!(output.contains("finished=true"), "{output}");
+    assert!(output.contains("exit_code=7"), "{output}");
+    assert!(output.contains("job-output"), "{output}");
+    tools.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn long_foreground_command_yields_and_preserves_shell_session() {
+    let f = Fixture::new(Mode::Bypass);
+    let mut tools = gitcode::tools::Tools::new(f.engine.clone());
+    let start = tools.execute("Bash", &serde_json::json!({"command":"export GITCODE_YIELD_TEST=works; printf early; sleep 0.2; printf late", "yield_time_ms":20})).await.unwrap();
+    assert!(start.contains("background shell job job-1"), "{start}");
+    let output = tools
+        .execute(
+            "BashOutput",
+            &serde_json::json!({"job_id":"job-1", "wait_ms":5000}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        output.contains("finished=true")
+            && output.contains("exit_code=0")
+            && output.contains("late"),
+        "{output}"
+    );
+    let env = tools
+        .execute(
+            "Bash",
+            &serde_json::json!({"command":"printenv GITCODE_YIELD_TEST"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(env.trim(), "works");
+    tools.shutdown().await.unwrap();
+}

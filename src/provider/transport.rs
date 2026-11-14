@@ -43,6 +43,7 @@ impl WireStream {
 }
 
 /// Cancellation-safe Messages client; dropping its request future closes the stream.
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     endpoint: String,
@@ -52,6 +53,9 @@ pub struct Client {
     retry: Policy,
     protocol: Protocol,
     effort: Option<String>,
+    prompt_cache: bool,
+    cache_key: Option<String>,
+    official_host: Option<String>,
 }
 
 impl Client {
@@ -80,6 +84,15 @@ impl Client {
         {
             return Err("provider URL must use HTTP(S) without embedded credentials".into());
         }
+        let official_host = if url.scheme() == "https" && url.port_or_known_default() == Some(443) {
+            url.host_str().map(str::to_owned)
+        } else {
+            None
+        };
+        let mut nonce = [0_u8; 16];
+        let cache_key = getrandom::fill(&mut nonce)
+            .ok()
+            .map(|()| nonce.iter().map(|b| format!("{b:02x}")).collect::<String>());
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -101,7 +114,15 @@ impl Client {
             retry: Policy::default(),
             protocol,
             effort: None,
+            prompt_cache: true,
+            cache_key,
+            official_host,
         })
+    }
+
+    /// Enable or disable cache hints on supported official endpoints.
+    pub fn set_prompt_cache(&mut self, enabled: bool) {
+        self.prompt_cache = enabled;
     }
 
     /// Set the requested reasoning effort for subsequent requests; `None` uses the provider default.
@@ -280,6 +301,13 @@ impl Client {
             Protocol::OpenaiChat => openai_chat::encode(request)?,
             Protocol::OpenaiResponses => openai_responses::encode(request)?,
         };
+        apply_cache_policy(
+            &mut body,
+            self.protocol,
+            self.official_host.as_deref(),
+            self.prompt_cache,
+            self.cache_key.as_deref(),
+        );
         if let Some(effort) = self.effort() {
             match self.protocol {
                 Protocol::Anthropic => {
@@ -490,6 +518,64 @@ mod usage_tests {
                 assert_eq!(usage.input_tokens, 18);
             }
             assert!(matches!(events.last(), Some(Event::Done { .. })));
+        }
+    }
+}
+
+fn apply_cache_policy(
+    body: &mut serde_json::Value,
+    protocol: Protocol,
+    host: Option<&str>,
+    enabled: bool,
+    key: Option<&str>,
+) {
+    if !enabled {
+        return;
+    }
+    match (protocol, host) {
+        (Protocol::Anthropic, Some("api.anthropic.com")) => {
+            body["cache_control"] = serde_json::json!({"type":"ephemeral"})
+        }
+        (Protocol::OpenaiResponses, Some("api.openai.com")) => {
+            if let Some(key) = key {
+                body["prompt_cache_key"] = serde_json::json!(key);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod cache_policy_tests {
+    use super::*;
+    #[test]
+    fn cache_hints_are_scoped_to_official_hosts_and_can_be_disabled() {
+        let mut anthropic = serde_json::json!({});
+        apply_cache_policy(
+            &mut anthropic,
+            Protocol::Anthropic,
+            Some("api.anthropic.com"),
+            true,
+            None,
+        );
+        assert_eq!(anthropic["cache_control"]["type"], "ephemeral");
+        let mut openai = serde_json::json!({});
+        apply_cache_policy(
+            &mut openai,
+            Protocol::OpenaiResponses,
+            Some("api.openai.com"),
+            true,
+            Some("random-session"),
+        );
+        assert_eq!(openai["prompt_cache_key"], "random-session");
+        for (protocol, host, enabled) in [
+            (Protocol::Anthropic, "relay.example", true),
+            (Protocol::OpenaiResponses, "api.openai.com", false),
+            (Protocol::OpenaiChat, "api.openai.com", true),
+        ] {
+            let mut body = serde_json::json!({});
+            apply_cache_policy(&mut body, protocol, Some(host), enabled, Some("x"));
+            assert_eq!(body, serde_json::json!({}));
         }
     }
 }

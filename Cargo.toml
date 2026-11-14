@@ -65,3 +65,6 @@ missing_docs = "warn"
 [lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+
+[patch.crates-io]
+crossterm = { path = "vendor/crossterm" }

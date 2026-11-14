@@ -105,6 +105,11 @@ pub const BUILTIN_COMMANDS: &[BuiltinSlashSpec] = &[
         argument_hint: None,
     },
     BuiltinSlashSpec {
+        name: "import",
+        description: "Import a Claude Code or Codex session",
+        argument_hint: Some("[path]"),
+    },
+    BuiltinSlashSpec {
         name: "resume",
         description: "Resume a previously saved conversation session",
         argument_hint: Some("[session-id]"),

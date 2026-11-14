@@ -1,144 +1,75 @@
-<div align="center">
+# GitCode
 
-<img src="assets/banner.png" alt="gitcode — A terminal coding agent written in Rust" width="100%" />
+GitCode is a local-first terminal coding agent written in Rust. It works with an existing repository, uses a configured language-model provider to investigate and change code, and asks for permission before actions that change files, run shell commands, or access network tools.
 
-[![Rust](https://img.shields.io/badge/rust-1.99-D6336C?style=flat&labelColor=1C1128)](Cargo.toml)
-[![Platforms](https://img.shields.io/badge/platforms-Linux_%7C_macOS_%7C_Windows-7A3FB5?style=flat&labelColor=1C1128)](docs/windows.md)
-[![Status](https://img.shields.io/badge/status-in_development-7A3FB5?style=flat&labelColor=1C1128)](docs/dev/COMPLIANCE-AUDIT.md)
-[![License](https://img.shields.io/badge/license-MIT-7BD389?style=flat&labelColor=1C1128)](LICENSE)
+GitCode is under active development. Review proposed actions and changes, and use an isolated environment for work you do not trust. Model output and tool results can contain mistakes or hostile instructions.
 
-[Scope](#current-scope) · [Run](#run-from-source) · [Providers](#provider-endpoints) · [Safety](#safety-and-limitations) · [Development](#development)
+## What GitCode does
 
-</div>
+- Reads and searches files, edits text and notebooks, applies patches, and runs shell commands with permission controls.
+- Supports Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, and compatible endpoints. Provider credentials stay in your environment or local credential store.
+- Saves sessions locally, resumes conversations, and imports supported Claude Code and Codex journals. `/context` shows the estimated context and `/compact` creates a new summary on demand.
+- Summarizes older history as the configured context limit approaches while keeping recent messages and tool-call pairs together. The original session remains available locally. Summaries are model-generated and can omit details; they incur provider usage.
+- Offers terminal and noninteractive modes, usage accounting, configurable agents, skills, web fetch, and configured MCP tool calls. Integration coverage varies; see the guides below for limitations.
 
-# gitcode
+## Install
 
-A local-first terminal coding agent under development in a single Rust Cargo package. The current executable runs a bounded model/tool loop over Anthropic Messages, OpenAI Chat Completions, or OpenAI Responses, with workspace editing and shell tools behind a permission engine.
+Prebuilt archives and checksums are available on [GitHub Releases](https://github.com/jaddd14/gitcode-agent/releases). Download the archive for your operating system, verify its SHA-256 against `SHA256SUMS`, and put the `gitcode` executable on your `PATH`. The release assets also include per-user installers.
 
-> [!NOTE]
-> Full Claude Code / Codex workflow parity is a development target, **not a current feature claim**. The [compliance audit](docs/dev/COMPLIANCE-AUDIT.md) distinguishes helper modules from working executable behavior and records missing acceptance checks.
+For a source build, install the toolchain specified in `rust-toolchain.toml` and run:
 
-## Current scope
-
-| Area | Current implementation | Important limitations |
-| --- | --- | --- |
-| Provider transport | Three HTTP/SSE adapters, fragmented-stream fixtures and local TCP mock tests | Advanced reasoning replay, registry options and resilience acceptance are incomplete |
-| Agent | Model -> validated tools -> tool results -> model loop | Parallel tool scheduling and cancellation-consistent persistence remain incomplete |
-| Workspace tools | Read, LS, Glob, Grep, Write, Edit, MultiEdit, NotebookEdit, apply_patch | Text-oriented reads; no complete image/PDF tool path |
-| Editing | Read-before-write tracking and per-file atomic replacement | Multi-file changes are not crash-atomic; checkpoints/diffs are not integrated automatically |
-| Shell | Persistent non-interactive sessions and background-job helpers | No OS-level sandbox; complex syntax is checked as a whole |
-| Terminal | Borderless startup mark and build highlights, framed prompt, immediate slash popup, tabbed usage, model picker, live retry/tool progress, Unicode editor and streaming Markdown | Advanced completion and persistent history remain incomplete |
-| Headless | `-p`, `exec`, bounded stdin, text/JSON and live stream-JSON output, doctor and completions | Stream input accepts text/message.content strings; full flags/tool-event parity remains incomplete |
-| Sessions and usage | Completed CLI/TUI turns persist, `--resume`/`--continue`, project memory, per-request usage ledger | Abrupt process termination can lose in-flight work; prices remain unknown and USD budgets fail closed |
-| Other modules | Checkpoints, agency, commands, hooks, skills, MCP and web helpers | Module presence does not mean these are available in the interactive application |
-
-## What it looks like
-
-<img src="assets/preview.svg" alt="Illustration of the planned terminal interface; not a screenshot" width="100%" />
-
-*Design illustration, not a captured application screenshot. Some illustrated functionality remains unintegrated.*
-
-## Windows port and installers
-
-Native Linux, macOS and Windows test matrices and installer smoke jobs passed [CI 42580738915](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738915) on `a5621f6`; [Security](https://github.com/jaddd14/gitcode-agent/actions/runs/42580738949) passed too. Release publication is still pending. Native GUI clipboard/toast display is not validated by those headless jobs. See [Windows requirements and limitations](docs/windows.md) and [static installer deployment](docs/dev/DEPLOY-INSTALLER.md).
-
-The custom-domain installer endpoint is not live (manifest check returned HTTP 404). Once a release containing these scripts is verified and merged, the GitHub-hosted installation paths are:
-
-```bash
-export GITCODE_BASE_URL=https://github.com/jaddd14/gitcode-agent/releases/latest/download
-curl -fsSL https://raw.githubusercontent.com/jaddd14/gitcode-agent/main/scripts/install.sh | bash
-```
-
-```powershell
-$env:GITCODE_BASE_URL = 'https://github.com/jaddd14/gitcode-agent/releases/latest/download'
-irm https://raw.githubusercontent.com/jaddd14/gitcode-agent/main/scripts/install.ps1 | iex
-```
-
-These are pending publication, not currently verified installation commands. Installers use SHA256 verification and require no administrator rights. A verified installation can later be updated with `gitcode update`.
-
-## Run from source
-
-Use Rust 1.99, the installed toolchain used during development. Older Rust versions have not been verified.
-
-```bash
-cargo build --release
-./target/release/gitcode --help
+```sh
+git clone https://github.com/jaddd14/gitcode-agent.git
+cd gitcode-agent
+cargo build --release --locked
 ./target/release/gitcode --version
-./target/release/gitcode
 ```
 
-A configured reachable provider is needed for model requests; startup itself does not request model output.
+GitCode supports Linux, macOS, and Windows. Platform details and terminal requirements are documented in [Windows](docs/windows.md). Interactive disconnect recovery uses tmux on Unix when available; Windows uses psmux when configured.
 
-On Unix, interactive GitCode uses `tmux` when available so work continues after a terminal or SSH disconnect. Reconnect from the same project directory with `gitcode --continue`. If already running inside tmux, GitCode uses that session. Use Ctrl+C to interrupt a turn and exit GitCode normally to stop the session. Without tmux, GitCode warns and runs attached to the terminal; a reboot or killed tmux server also stops the process.
+## Get started
 
-On Windows, the corresponding integration uses [psmux](https://github.com/psmux/psmux), installed separately. The Windows disconnect and reconnect integration requires native Windows acceptance testing before release.
+Set a provider key in your environment and choose a model available to your account. For the default Anthropic protocol:
 
-```bash
-export ANTHROPIC_API_KEY="<your-key>"
-./target/release/gitcode -p "Inspect src/lib.rs and summarize the module boundaries"
+```sh
+export ANTHROPIC_API_KEY="your-api-key"
+gitcode --model YOUR_MODEL
 ```
 
-[Release v0.1.0](https://github.com/jaddd14/gitcode-agent/releases/tag/v0.1.0) provides Linux x86_64 and macOS arm64 archives plus SHA256SUMS. Linux/macOS CI, Security, staging and release passed for `b3aca36`. This initial speed-first release retains the documented limitations; it does not claim full workflow parity.
+Run from the project directory. Describe the task in the terminal; review permission requests and the resulting diff. GitCode uses Russian by default and follows the language of the conversation. For noninteractive use:
 
-## Provider endpoints
-
-The executable currently accepts explicit endpoint/protocol overrides. Set an API key locally; never commit it.
-
-```bash
-./target/release/gitcode --protocol anthropic --base-url https://api.anthropic.com -p "Hello"
-./target/release/gitcode --protocol openai-chat --base-url https://api.openai.com/v1 -p "Hello"
-./target/release/gitcode --protocol openai-responses --base-url https://api.openai.com/v1 -p "Hello"
+```sh
+gitcode --model YOUR_MODEL -p "Explain the architecture of this repository"
+gitcode doctor --json
 ```
 
-Credential environment-variable selection follows the configured `provider.api_key_env`; changing a wire protocol alone does not change that variable. Configure it explicitly for non-Anthropic endpoints.
+Other providers require a matching protocol, endpoint, model and credential-variable configuration. Changing the protocol alone does not change the credential variable. See [provider setup](docs/providers.md) and the [configuration example](docs/config.example.toml).
 
-`--provider` selects a preset from `src/provider/registry.rs`. Explicit endpoint and protocol flags can override the selected preset. A complete live-selectable provider/model registry is not yet available.
+## Context and sessions
 
-## Safety and limitations
+`context_window` must match the model's available window; `compaction_threshold` controls when automatic summarization begins. Context sizes are estimates, not provider token guarantees. The recent tail is kept according to a token budget, and the summary checkpoint is reused only when it still matches the original history. `/compact` accepts optional focus instructions. See [configuration](docs/configuration.md) for costs and limits.
 
-- Interactive Bash requests can be approved once, rejected, or approved for single commands sharing the displayed executable and first argument until the conversation changes. Interactive file edits, web fetches and MCP calls can also be approved once. Explicit deny rules still apply; noninteractive requests requiring approval fail closed.
-- `--dangerously-skip-permissions` enables bypass behavior; explicit denial rules and parser restrictions still apply. This flag is not filesystem isolation.
-- Native file tools check workspace boundaries. Arbitrary shell commands are **not confined by an OS sandbox**.
-- File and web content must be treated as untrusted input. This does not eliminate prompt-injection risk.
-- Bash supports substitutions, redirects, multiline scripts and other shell syntax. Complex commands are approved as a whole; when scoped Bash deny rules are configured, complex syntax fails closed because its component commands cannot be reliably inferred.
-- Bash commands have no default deadline; an optional `timeout_seconds` explicitly sets one. Output remains bounded.
-- Cancellation, secret handling and concurrent-file race protection require continued hardening; see [SECURITY.md](SECURITY.md).
+Use `gitcode --continue` or `/resume` to return to a session. `/import` can copy supported conversations into the current project; imported source journals are retained privately. See `/help` for current commands.
 
-## Configuration
+## Security and privacy
 
-Configuration precedence is defaults < user `~/.gitcode/config.toml` < project `.gitcode/config.toml` < local `.gitcode/config.local.toml` < environment < applicable CLI overrides. The schema is in `src/config.rs`; unsupported keys fail validation.
+Built-in file tools reject common sensitive paths such as `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.toml`, `.ssh` and `.aws`, including resolved symlink targets. This is a limited safeguard, not secret detection: other filenames can contain credentials, and approved shell commands or external processes run with your operating-system privileges. The agent is not an OS sandbox.
 
-The product defaults to Russian replies. Source code, development documentation and commit messages use English.
+Shell execution, workspace edits, web requests and MCP calls require permission in the default mode; headless operations requiring approval fail closed. `--dangerously-skip-permissions` skips prompts and should only be used in an environment you control. Prompt injection remains a risk. Conversations and tool results are sent to the selected provider when needed and are persisted locally; review the provider's data policies and avoid placing secrets in prompts.
 
-## Development
+Diagnostic logs redact registered credentials and some common token forms as a best effort, not a guarantee for arbitrary secrets. See [SECURITY.md](SECURITY.md) for the security model and private vulnerability reporting.
 
-```bash
+## Configuration and development
+
+Configuration precedence is defaults, user config, project config, local project config, environment, then applicable CLI flags. Project config cannot redirect credentials without explicit user trust. See [configuration](docs/configuration.md), [permissions](docs/permissions.md), [subagents](docs/subagents.md), [MCP](docs/mcp.md), and [hooks](docs/hooks.md).
+
+```sh
 ./scripts/check.sh
+cargo audit
 ```
 
-The quality gate runs formatting, strict Clippy and tests. Provider tests use local TCP mock servers and SSE fixtures under `testdata/`; they do not require real API credentials. Historical passing test counts do not certify current uncommitted changes.
+Tests use local mock providers and do not establish quality on real coding benchmarks. Contributions and bug reports are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-- [Compliance audit](docs/dev/COMPLIANCE-AUDIT.md): milestone-by-milestone gaps and evidence.
-- [Progress](docs/dev/PROGRESS.md): historical checks and current development state.
-- [Decisions](docs/dev/DECISIONS.md): engineering choices and limitations.
-- [Architecture](docs/dev/ARCHITECTURE.md): module boundaries.
-- [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), [Code of conduct](CODE_OF_CONDUCT.md).
-- Guides: [configuration](docs/configuration.md), [providers](docs/providers.md), [permissions](docs/permissions.md), [headless](docs/headless.md), [usage](docs/usage-and-cost.md).
-- Integrations: [skills](docs/skills.md), [hooks](docs/hooks.md), [MCP](docs/mcp.md), [agency](docs/subagents.md); [troubleshooting](docs/troubleshooting.md).
+## License
 
-## Performance
-
-Measured on Linux 6.8, aarch64, Rust 1.99.0, using a freshly rebuilt release executable on 2026-11-08:
-
-| Measurement | Result |
-| --- | --- |
-| Executable size | 5,289,176 bytes (5.04 MiB) |
-| Warm-cache `--version`, 10 launches | 2.20 ms average |
-| Warm-cache `--help`, 10 launches | 1.70 ms average |
-| Peak RSS of `--version` | 3,456 KiB (3.38 MiB) |
-
-Reproduce with `bash scripts/bench.sh`. These are process-launch measurements, **not** first-painted-frame, active-session memory, idle CPU or streaming frame latency. Those budgets and long-duration soak coverage remain unverified.
-
-## License and acknowledgements
-
-[MIT](LICENSE), copyright 2026 jaddd14. Built in an AI pair-programming workflow; repository authorship and publication remain subject to the final history audit.
+[MIT](LICENSE). GitCode is an independent project and is not affiliated with OpenCode, Anthropic, or OpenAI.

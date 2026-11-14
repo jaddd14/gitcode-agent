@@ -89,7 +89,7 @@ impl Message {
 /// Per-request accounting; absent provider values remain explicitly estimated.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Usage {
-    /// Non-cached input tokens.
+    /// Uncached input tokens, excluding cache reads and writes on all providers.
     pub input_tokens: u64,
     /// Generated tokens.
     pub output_tokens: u64,

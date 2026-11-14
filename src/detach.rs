@@ -211,6 +211,13 @@ mod unix {
             .status()
             .map_err(|_| "не удалось настроить сессию GitCode")?;
         if status.success() {
+            // tmux < 3.3 permits DCS passthrough unconditionally; newer versions
+            // gate it per window. Never enable application clipboard access globally.
+            let _ = Command::new("tmux")
+                .args(["set-option", "-w", "-t", target, "allow-passthrough", "on"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
             Ok(())
         } else {
             Err("не удалось скрыть строку tmux в сессии GitCode".into())

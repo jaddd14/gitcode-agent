@@ -143,6 +143,13 @@ impl Engine {
 
     /// Decide using rule precedence and a read-only plan boundary.
     pub fn decide(&self, tool: &str, resource: &str, mutating: bool) -> Decision {
+        if matches!(
+            tool,
+            "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "apply_patch"
+        ) && sensitive_path(resource)
+        {
+            return Decision::Deny;
+        }
         if self.deny.iter().any(|r| r.matches(tool, resource)) {
             return Decision::Deny;
         }
@@ -192,6 +199,26 @@ impl Engine {
         }
         Ok(canonical)
     }
+}
+
+// Native tools do not silently expose common credential files, including through
+// absolute paths and resolved symlinks. Shell processes remain outside this policy.
+fn sensitive_path(resource: &str) -> bool {
+    let normalized = resource.replace('\\', "/");
+    normalized.split('/').any(|component| {
+        let name = if cfg!(windows) {
+            component.to_ascii_lowercase()
+        } else {
+            component.to_owned()
+        };
+        name == ".env"
+            || name.starts_with(".env.")
+            || name == ".ssh"
+            || name == ".aws"
+            || name == "credentials.toml"
+            || name.ends_with(".pem")
+            || name.ends_with(".key")
+    })
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ mod provider {
 #[path = "../src/session/memory.rs"]
 mod memory;
 #[path = "../src/session/store.rs"]
+#[allow(dead_code)] // This isolated path-level suite exercises only part of the store API.
 mod store;
 
 use gitcode::provider::canonical::{Content, Message, Role};

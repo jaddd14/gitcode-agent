@@ -17,19 +17,28 @@ pub fn encode(request: &Request) -> Result<Value, String> {
             Role::Assistant => "assistant",
         };
         let mut text = String::new();
+        let mut parts = Vec::new();
+        let mut has_attachments = false;
         let mut calls = Vec::new();
         let mut results = Vec::new();
         for block in &message.content {
             match block {
-                Content::Text {text:part} => text.push_str(part),
+                Content::Text {text:part} => { text.push_str(part); parts.push(json!({"type":"text","text":part})); },
                 Content::ToolUse {id,name,input} => calls.push(json!({"id":id,"type":"function","function":{"name":name,"arguments":input.to_string()}})),
                 Content::ToolResult {tool_use_id,content,..} => results.push(json!({"role":"tool","tool_call_id":tool_use_id,"content":content})),
                 Content::Thinking {..} => {},
-                _ => return Err("Chat attachment encoding is not available".into()),
+                Content::Image {media_type,data} if message.role == Role::User => { has_attachments = true; parts.push(json!({"type":"image_url","image_url":{"url":format!("data:{media_type};base64,{data}")}})); },
+                Content::Document {media_type,data} if message.role == Role::User && media_type == "application/pdf" => { has_attachments = true; parts.push(json!({"type":"file","file":{"filename":"document.pdf","file_data":format!("data:{media_type};base64,{data}")}})); },
+                _ => return Err("Chat attachment type or role is not supported".into()),
             }
         }
-        if !text.is_empty() || !calls.is_empty() {
-            let mut m = json!({"role":role,"content":text});
+        if !text.is_empty() || !calls.is_empty() || has_attachments {
+            let content = if has_attachments {
+                json!(parts)
+            } else {
+                json!(text)
+            };
+            let mut m = json!({"role":role,"content":content});
             if !calls.is_empty() {
                 m["tool_calls"] = json!(calls);
             }
@@ -106,12 +115,15 @@ impl Stream {
         }
         let mut output = Vec::new();
         if let Some(u) = value.get("usage").filter(|u| !u.is_null()) {
+            let total_input = u["prompt_tokens"].as_u64().unwrap_or(0);
+            let cached_input = u["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap_or(0)
+                .min(total_input);
             let usage = Usage {
-                input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0),
+                input_tokens: total_input.saturating_sub(cached_input),
                 output_tokens: u["completion_tokens"].as_u64().unwrap_or(0),
-                cache_read_tokens: u["prompt_tokens_details"]["cached_tokens"]
-                    .as_u64()
-                    .unwrap_or(0),
+                cache_read_tokens: cached_input,
                 reasoning_tokens: u["completion_tokens_details"]["reasoning_tokens"]
                     .as_u64()
                     .unwrap_or(0),

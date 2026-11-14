@@ -23,7 +23,9 @@ pub fn encode(request: &Request) -> Result<Value, String> {
                 Content::ToolResult {tool_use_id,content,..} => input.push(json!({"type":"function_call_output","call_id":tool_use_id,"output":content})),
                 Content::Thinking {encrypted_content:Some(data),..} => input.push(json!({"type":"reasoning","encrypted_content":data,"summary":[]})),
                 Content::Thinking {..} => {},
-                _=>return Err("Responses attachment encoding is not available".into()),
+                Content::Image {media_type,data} if message.role == Role::User => input.push(json!({"role":"user","content":[{"type":"input_image","image_url":format!("data:{media_type};base64,{data}")}]})),
+                Content::Document {media_type,data} if message.role == Role::User && media_type == "application/pdf" => input.push(json!({"role":"user","content":[{"type":"input_file","filename":"document.pdf","file_data":format!("data:{media_type};base64,{data}")}]})),
+                _=>return Err("Responses attachment type or role is not supported".into()),
             }
         }
     }
@@ -142,13 +144,16 @@ impl Stream {
                     });
                 }
                 let u = &value["response"]["usage"];
+                let total_input = u["input_tokens"].as_u64().unwrap_or(0);
+                let cached_input = u["input_tokens_details"]["cached_tokens"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .min(total_input);
                 output.push(Event::Usage {
                     usage: Usage {
-                        input_tokens: u["input_tokens"].as_u64().unwrap_or(0),
+                        input_tokens: total_input.saturating_sub(cached_input),
                         output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
-                        cache_read_tokens: u["input_tokens_details"]["cached_tokens"]
-                            .as_u64()
-                            .unwrap_or(0),
+                        cache_read_tokens: cached_input,
                         reasoning_tokens: u["output_tokens_details"]["reasoning_tokens"]
                             .as_u64()
                             .unwrap_or(0),
@@ -165,6 +170,16 @@ impl Stream {
                     .into(),
                 });
                 self.done = true;
+            }
+            "response.incomplete"
+                if value["response"]["incomplete_details"]["reason"] == "max_output_tokens" =>
+            {
+                return Err("Responses output token limit reached".into());
+            }
+            "response.incomplete"
+                if value["response"]["incomplete_details"]["reason"] == "content_filter" =>
+            {
+                return Err("Responses content filtered".into());
             }
             "response.failed" | "response.incomplete" | "error" => {
                 return Err("Responses request failed or was incomplete".into())

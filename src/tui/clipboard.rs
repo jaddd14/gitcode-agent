@@ -1,9 +1,8 @@
 //! Explicit user-requested clipboard operations; never interpolate user data as shell code.
 
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 
 use crate::provider::canonical::Content;
-#[cfg(any(windows, test))]
 use base64::{engine::general_purpose::STANDARD, Engine};
 
 #[cfg(any(windows, test))]
@@ -127,7 +126,29 @@ pub async fn copy_text(text: &str) -> io::Result<()> {
             "interactive clipboard required",
         ));
     }
-    copy_native(text).await
+    finish_text_copy(copy_native(text).await, &mut io::stdout().lock(), text)
+}
+
+fn finish_text_copy(native: io::Result<()>, writer: &mut impl Write, text: &str) -> io::Result<()> {
+    match native {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => write_osc52(writer, text),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn write_osc52(writer: &mut impl Write, text: &str) -> io::Result<()> {
+    write_osc52_transport(writer, text, std::env::var_os("TMUX").is_some())
+}
+
+fn write_osc52_transport(writer: &mut impl Write, text: &str, tmux: bool) -> io::Result<()> {
+    let encoded = STANDARD.encode(text.as_bytes());
+    if tmux {
+        write!(writer, "\x1bPtmux;\x1b\x1b]52;c;{encoded}\x07\x1b\\")?;
+    } else {
+        write!(writer, "\x1b]52;c;{encoded}\x07")?;
+    }
+    writer.flush()
 }
 
 #[cfg(windows)]
@@ -170,8 +191,59 @@ async fn copy_native(_text: &str) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod image_tests {
     use super::*;
+
+    #[test]
+    fn osc52_encodes_text_without_interpreting_terminal_controls() {
+        let text = "текст\n\x1b]52;c;injected\x07";
+        let encoded = STANDARD.encode(text);
+        let mut direct = Vec::new();
+        write_osc52_transport(&mut direct, text, false).unwrap();
+        assert_eq!(direct, format!("\x1b]52;c;{encoded}\x07").as_bytes());
+        let mut tmux = Vec::new();
+        write_osc52_transport(&mut tmux, text, true).unwrap();
+        assert_eq!(
+            tmux,
+            format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}\x07\x1b\\").as_bytes()
+        );
+    }
+
+    #[test]
+    fn copy_command_falls_back_only_when_native_clipboard_is_unsupported() {
+        let mut output = Vec::new();
+        finish_text_copy(Err(io::ErrorKind::Unsupported.into()), &mut output, "ответ").unwrap();
+        let mut expected = Vec::new();
+        write_osc52(&mut expected, "ответ").unwrap();
+        assert_eq!(output, expected);
+        output.clear();
+        finish_text_copy(Ok(()), &mut output, "ответ").unwrap();
+        assert!(output.is_empty());
+        assert!(
+            finish_text_copy(Err(io::ErrorKind::BrokenPipe.into()), &mut output, "ответ").is_err()
+        );
+        assert!(output.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn linux_native_clipboard_requests_terminal_fallback() {
+        assert_eq!(
+            copy_native("text").await.unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+    }
+
+    #[tokio::test]
+    async fn redirected_text_copy_never_writes_osc52() {
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            assert_eq!(
+                copy_text("text").await.unwrap_err().kind(),
+                io::ErrorKind::Unsupported
+            );
+        }
+    }
 
     #[tokio::test]
     async fn redirected_sessions_never_access_native_clipboard() {

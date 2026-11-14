@@ -1,6 +1,5 @@
 //! Fixed composer and an in-memory, incrementally painted conversation viewport.
 use super::render::Frame;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use std::{
     io::{self, Write},
@@ -15,6 +14,7 @@ pub(super) struct Viewport {
     frame: Option<Frame>,
     prefix: usize,
     offset: usize,
+    target_offset: usize,
     previous_count: usize,
     screen: Vec<String>,
     drawn: Vec<String>,
@@ -40,6 +40,7 @@ struct Selection {
     changed: Instant,
     copied: bool,
     dragging: bool,
+    composer: bool,
     text: String,
     start: (usize, usize),
     end: (usize, usize),
@@ -83,6 +84,22 @@ impl Viewport {
         s.start = a;
         s.end = b;
         let empty: &[String] = &[];
+        if s.composer {
+            let mut parts = Vec::new();
+            for row in a.0..=b.0.min(self.screen.len().saturating_sub(1)) {
+                let line = super::plain(&self.screen[row]);
+                let from = if row == a.0 { a.1.max(3) } else { 3 };
+                let content_end = UnicodeWidthStr::width(line.as_str()).saturating_sub(1);
+                let to = if row == b.0 {
+                    b.1.saturating_add(1).min(content_end)
+                } else {
+                    content_end
+                };
+                parts.push(slice_cells(&line, from, to).trim_end().to_owned());
+            }
+            s.text = parts.join("\n");
+            return;
+        }
         s.text = selected_rows(
             history,
             frame_lines.map_or(empty, |f| f.lines.as_slice()),
@@ -101,7 +118,7 @@ impl Viewport {
         let Some(s) = &mut self.selection else {
             return;
         };
-        if !s.dragging {
+        if !s.dragging || s.composer {
             return;
         }
         s.cursor.0 = if rows < 0 {
@@ -115,10 +132,49 @@ impl Viewport {
     pub fn mouse(&mut self, event: MouseEvent) {
         let screen = (event.row as usize, event.column as usize);
         match event.kind {
-            MouseEventKind::ScrollUp => self.offset = self.offset.saturating_add(6),
-            MouseEventKind::ScrollDown => self.offset = self.offset.saturating_sub(6),
+            MouseEventKind::ScrollUp => {
+                self.target_offset = self.target_offset.saturating_add(6);
+                if self
+                    .selection
+                    .as_ref()
+                    .is_some_and(|s| s.dragging && !s.composer)
+                {
+                    self.offset = self.target_offset;
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                self.target_offset = self.target_offset.saturating_sub(6);
+                if self
+                    .selection
+                    .as_ref()
+                    .is_some_and(|s| s.dragging && !s.composer)
+                {
+                    self.offset = self.target_offset;
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
-                let point = self.content_point(screen);
+                let composer = screen.0 >= self.view_chat_height
+                    && self.screen.get(screen.0).is_some_and(|row| {
+                        let line = super::plain(row);
+                        line.starts_with(" › ")
+                            || line.starts_with("│  ")
+                            || line.starts_with("|  ")
+                    });
+                if screen.0 >= self.view_chat_height && !composer {
+                    return;
+                }
+                let point = if composer {
+                    // Padding to the right of the prompt is not text: a click there
+                    // snaps to the end of the line instead of parking a block cursor
+                    // in empty space.
+                    let limit = self
+                        .screen
+                        .get(screen.0)
+                        .map_or(screen.1, |row| composer_text_end(row).max(3));
+                    (screen.0, screen.1.min(limit))
+                } else {
+                    self.content_point(screen)
+                };
                 self.selection = Some(Selection {
                     anchor: point,
                     cursor: point,
@@ -126,13 +182,18 @@ impl Viewport {
                     changed: Instant::now(),
                     copied: false,
                     dragging: true,
+                    composer,
                     text: String::new(),
                     start: point,
                     end: point,
                 })
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                let point = self.content_point(screen);
+                let point = if self.selection.as_ref().is_some_and(|s| s.composer) {
+                    screen
+                } else {
+                    self.content_point(screen)
+                };
                 if let Some(s) = &mut self.selection {
                     s.cursor = point;
                     s.pointer = screen;
@@ -141,7 +202,11 @@ impl Viewport {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                let point = self.content_point(screen);
+                let point = if self.selection.as_ref().is_some_and(|s| s.composer) {
+                    screen
+                } else {
+                    self.content_point(screen)
+                };
                 if let Some(s) = &mut self.selection {
                     s.cursor = point;
                     s.pointer = screen;
@@ -164,6 +229,9 @@ impl Viewport {
             self.resolve_selection(width);
         }
     }
+    pub fn scroll_pending(&self) -> bool {
+        self.offset != self.target_offset
+    }
     pub fn copy_if_due(&mut self, writer: &mut impl Write) -> io::Result<Option<usize>> {
         let Some(s) = &mut self.selection else {
             return Ok(None);
@@ -172,12 +240,7 @@ impl Viewport {
             return Ok(None);
         }
         if !s.text.is_empty() {
-            write!(
-                writer,
-                "\x1b]52;c;{}\x07",
-                STANDARD.encode(s.text.as_bytes())
-            )?;
-            writer.flush()?;
+            super::clipboard::write_osc52(writer, &s.text)?;
             s.copied = true;
             return Ok(Some(s.text.graphemes(true).count()));
         }
@@ -195,15 +258,21 @@ impl Viewport {
         let chat_height = height.saturating_sub(composer.len());
         let count = self.history.len() + prefix;
         if self.offset > 0 {
-            self.offset = self
-                .offset
-                .saturating_add(count.saturating_sub(self.previous_count));
+            let added = count.saturating_sub(self.previous_count);
+            self.offset = self.offset.saturating_add(added);
+            self.target_offset = self.target_offset.saturating_add(added);
         }
         self.previous_count = count;
         let max_offset = count.saturating_sub(chat_height);
+        self.target_offset = self.target_offset.min(max_offset);
         self.offset = self.offset.min(max_offset);
+        if self.offset < self.target_offset {
+            self.offset += 1;
+        } else if self.offset > self.target_offset {
+            self.offset -= 1;
+        }
         if let Some(s) = &self.selection {
-            if s.dragging {
+            if s.dragging && !s.composer {
                 // A held drag that reaches an edge scrolls, so the copy keeps
                 // following the pointer instead of stopping at the old view.
                 let edge = chat_height.saturating_sub(1);
@@ -213,6 +282,13 @@ impl Viewport {
                     self.offset = self.offset.saturating_add(3).min(max_offset);
                 }
             }
+        }
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.dragging && !s.composer)
+        {
+            self.target_offset = self.offset;
         }
         let end = count.saturating_sub(self.offset);
         let begin = end.saturating_sub(chat_height);
@@ -247,23 +323,51 @@ impl Viewport {
             self.resolve_selection(width);
         }
         if let Some(s) = &self.selection {
-            for screen_row in 0..chat_height.min(rows.len()) {
-                let content_row = begin + screen_row;
+            // In the composer the terminal already draws a blinking caret. A single
+            // click with nothing dragged would paint one more reverse-video cell
+            // right next to it, so only a real text range is highlighted.
+            let skip = s.composer && s.text.trim().is_empty();
+            let first = if s.composer { chat_height } else { 0 };
+            let last = if s.composer {
+                rows.len()
+            } else {
+                chat_height.min(rows.len())
+            };
+            for (screen_row, row) in rows
+                .iter_mut()
+                .enumerate()
+                .take(if skip { 0 } else { last })
+                .skip(if skip { 0 } else { first })
+            {
+                let content_row = if s.composer {
+                    screen_row
+                } else {
+                    begin + screen_row
+                };
                 if content_row < s.start.0 || content_row > s.end.0 {
                     continue;
                 }
-                let plain = super::plain(&rows[screen_row]);
+                let plain = super::plain(row);
                 let from = if content_row == s.start.0 {
                     s.start.1
                 } else {
                     0
                 };
+                let limit = if s.composer {
+                    composer_text_end(&plain).saturating_add(1)
+                } else {
+                    width
+                };
                 let to = if content_row == s.end.0 {
                     s.end.1.saturating_add(1)
                 } else {
                     width
-                };
-                rows[screen_row] = format!(
+                }
+                .min(limit);
+                if to <= from {
+                    continue;
+                }
+                *row = format!(
                     "{}\x1b[7m{}\x1b[0m{}",
                     slice_cells(&plain, 0, from),
                     slice_cells(&plain, from, to),
@@ -340,6 +444,17 @@ fn slice_cells(text: &str, from: usize, to: usize) -> String {
         })
         .collect()
 }
+/// Last cell of real prompt text, ignoring the frame edge and right padding.
+///
+/// The composer paints every row as ` › text … │`, so a pointer placed past the
+/// text must not anchor a selection or a block cursor in that empty space.
+fn composer_text_end(row: &str) -> usize {
+    let text = row
+        .strip_suffix('│')
+        .or_else(|| row.strip_suffix('|'))
+        .unwrap_or(row);
+    UnicodeWidthStr::width(text.trim_end())
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -371,11 +486,58 @@ mod tests {
         v.draw(&mut Vec::new(), (30, 5)).unwrap();
         assert_eq!(v.screen, ["line 6", "line 7", "line 8", "line 9", "prompt"]);
         v.mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
-        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        while v.scroll_pending() {
+            v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        }
         assert_eq!(v.screen, ["line 0", "line 1", "line 2", "line 3", "prompt"]);
         v.append(&["line 10".into()]);
         v.draw(&mut Vec::new(), (30, 5)).unwrap();
         assert_eq!(v.screen, ["line 0", "line 1", "line 2", "line 3", "prompt"]);
+    }
+
+    #[test]
+    fn composer_selection_copies_only_prompt_text() {
+        let mut v = Viewport::default();
+        v.set_frame(
+            &Frame {
+                lines: vec![
+                    "╭──────────────────╮".into(),
+                    " › привет мир      │".into(),
+                    "╰──────────────────╯".into(),
+                ],
+                cursor: None,
+            },
+            0,
+        );
+        v.draw(&mut Vec::new(), (20, 6)).unwrap();
+        v.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 4, 3));
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 8));
+        assert_eq!(v.selection.as_ref().unwrap().text, "привет");
+    }
+
+    #[test]
+    fn composer_click_past_the_text_stays_inside_prompt_content() {
+        let mut v = Viewport::default();
+        v.set_frame(
+            &Frame {
+                lines: vec![
+                    "╭──────────────────╮".into(),
+                    " › привет          │".into(),
+                    "╰──────────────────╯".into(),
+                ],
+                cursor: Some((1, 2)),
+            },
+            0,
+        );
+        v.draw(&mut Vec::new(), (20, 6)).unwrap();
+        // A click far right of the typed text must not anchor a block in padding.
+        v.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 4, 17));
+        let selection = v.selection.as_ref().unwrap();
+        assert!(selection.composer);
+        assert_eq!(selection.anchor.1, composer_text_end(&v.screen[4]).max(3));
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 4, 17));
+        assert!(v.selection.as_ref().unwrap().text.trim().is_empty());
+        assert!(!v.screen[4].contains("\x1b[7m"));
     }
 
     #[test]
@@ -420,6 +582,28 @@ mod tests {
     }
 
     #[test]
+    fn failed_selection_copy_is_retryable() {
+        let mut v = Viewport::default();
+        v.append(&["selected text".into()]);
+        v.set_frame(
+            &Frame {
+                lines: vec!["prompt".into()],
+                cursor: None,
+            },
+            0,
+        );
+        v.draw(&mut Vec::new(), (30, 4)).unwrap();
+        v.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0, 7));
+        v.selection.as_mut().unwrap().changed -= Duration::from_secs(1);
+        assert!(v
+            .copy_if_due(&mut std::io::Cursor::new(&mut [0u8; 0][..]))
+            .is_err());
+        assert!(!v.selection.as_ref().unwrap().copied);
+        assert_eq!(v.copy_if_due(&mut Vec::new()).unwrap(), Some(8));
+    }
+
+    #[test]
     fn copies_only_after_selection_has_been_idle_for_a_second() {
         let mut v = Viewport::default();
         v.append(&["год 1799".into(), "рождение".into()]);
@@ -441,10 +625,11 @@ mod tests {
             v.copy_if_due(&mut bytes).unwrap(),
             Some("год 1799\nрож".graphemes(true).count())
         );
-        assert_eq!(
-            String::from_utf8(bytes).unwrap(),
-            format!("\x1b]52;c;{}\x07", STANDARD.encode("год 1799\nрож"))
-        );
+        assert_eq!(String::from_utf8(bytes).unwrap(), {
+            let mut expected = Vec::new();
+            super::super::clipboard::write_osc52(&mut expected, "год 1799\nрож").unwrap();
+            String::from_utf8(expected).unwrap()
+        });
         let mut again = Vec::new();
         assert_eq!(v.copy_if_due(&mut again).unwrap(), None);
         assert!(again.is_empty());

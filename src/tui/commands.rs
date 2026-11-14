@@ -26,7 +26,7 @@ pub fn description(name: &str) -> &'static str {
     match name {
         "help" => "Команды и горячие клавиши",
         "clear" | "new" => "Очистить контекст разговора",
-        "compact" => "Сократить результаты инструментов",
+        "compact" => "Сжать контекст разговора",
         "config" => "Параметры конфигурации",
         "model" => "Выбрать модель",
         "effort" => "Уровень рассуждения",
@@ -36,6 +36,7 @@ pub fn description(name: &str) -> &'static str {
         "status" => "Состояние сессии и проекта",
         "context" => "Состав контекста",
         "resume" => "Сохранённые сессии",
+        "import" => "Импорт сессии Claude Code или Codex",
         "rewind" => "Контрольные точки",
         "plan" => "Режим планирования",
         "permissions" => "Режим и правила доступа",
@@ -304,10 +305,12 @@ pub async fn execute_command(
     if !args.is_empty()
         && !matches!(
             name,
-            "config"
+            "compact"
+                | "config"
                 | "model"
                 | "effort"
                 | "resume"
+                | "import"
                 | "rewind"
                 | "plan"
                 | "permissions"
@@ -363,24 +366,44 @@ pub async fn execute_command(
             "/resume история сессий"
         }
         "compact" => {
-            let before = context::estimate(messages).map_err(io::Error::other)?;
-            let count = context::trim_tool_results(messages, 4, 1024);
-            let after = context::estimate(messages).map_err(io::Error::other)?;
-            let saved = before.saturating_sub(after);
-            let ratio = if before > 0 {
-                (after as f64 / before as f64).clamp(0.0, 1.0)
-            } else {
-                0.0
+            let before = agent
+                .compaction
+                .estimate_projection(messages)
+                .map_err(io::Error::other)?;
+            let request = crate::provider::canonical::Request {
+                model: agent.model.clone(),
+                system: agent.system.clone(),
+                messages: messages.clone(),
+                tools: crate::tools::Tools::definitions(),
+                max_tokens: agent.max_tokens,
             };
-            body.extend([
-                format!("Токены контекста: ~{before} → ~{after} (экономия ~{saved})"),
-                format!(
-                    "Заполнение: [{}] {:.0}%",
-                    widgets::progress(ratio, inner.saturating_sub(22).clamp(6, 24), glyphs),
-                    ratio * 100.0
+            match agent
+                .compaction
+                .compact(
+                    &agent.client,
+                    &request,
+                    None,
+                    (!args.is_empty()).then_some(args),
+                )
+                .await
+            {
+                Ok((projection, usage)) if !usage.is_empty() => {
+                    let after = context::estimate(&projection).map_err(io::Error::other)?;
+                    body.push(format!(
+                        "Контекст сжат: ~{} → ~{} токенов.",
+                        compact(before),
+                        compact(after)
+                    ));
+                    body.push(format!(
+                        "Запросов на сжатие: {}. Полная история сохранена.",
+                        usage.len()
+                    ));
+                }
+                Ok(_) => body.push(
+                    "Нет более ранних сообщений для сжатия; полная история сохранена.".into(),
                 ),
-                format!("Сокращено результатов инструментов: {count}"),
-            ]);
+                Err(error) => body.push(format!("Сжатие не завершено: {error}")),
+            }
             "/context подробный состав"
         }
         "config" => {
@@ -394,8 +417,8 @@ pub async fn execute_command(
                     }
                     "max_turns" => {
                         match v.parse::<u32>() {
-                            Ok(turns) if turns > 0 => agent.max_turns = turns,
-                            _ => body.push("max_turns должен быть целым положительным числом; значение не изменено.".into()),
+                            Ok(turns) => agent.max_turns = turns,
+                            _ => body.push("max_turns должен быть неотрицательным целым числом; значение не изменено.".into()),
                         }
                     }
                     _ => body.push("Этот параметр нельзя изменить здесь. Поддерживаются model и max_turns.".into()),
@@ -450,6 +473,13 @@ pub async fn execute_command(
                 body.push(format!(" {mark} {id:<26} {note}"));
             }
             "/model <имя-модели> сменить"
+        }
+        "import" => {
+            body.push("Импорт текстовой переписки Claude Code или Codex в текущий проект.".into());
+            body.push(
+                "В интерактивном режиме выберите поиск или укажите путь к файлу JSONL.".into(),
+            );
+            "/import [путь] · затем /resume"
         }
         "effort" => {
             if !args.is_empty() {
@@ -545,15 +575,21 @@ pub async fn execute_command(
             "/doctor полная диагностика"
         }
         "context" => {
-            let sys_tokens = agent.system.len().div_ceil(4) as u64;
-            let tools_tokens = (crate::tools::Tools::definitions().len() * 140) as u64;
-            let mem_tokens = std::fs::read_to_string(root.join("GITCODE.md"))
-                .map(|s| s.len().div_ceil(4) as u64)
-                .unwrap_or(0);
-            let msg_tokens = context::estimate(messages).map_err(io::Error::other)?;
-            let used = sys_tokens + tools_tokens + mem_tokens + msg_tokens;
-            body.push("Размер окна условный: 200k; оценки по тексту, не данные провайдера.".into());
-            let window = agent.compaction.window;
+            let sys_tokens = (agent.system.len() as u64).div_ceil(3);
+            let definitions = crate::tools::Tools::definitions();
+            let tools_tokens = (serde_json::to_vec(&definitions)
+                .map_err(io::Error::other)?
+                .len() as u64)
+                .div_ceil(3);
+            let msg_tokens = agent
+                .compaction
+                .estimate_projection(messages)
+                .map_err(io::Error::other)?;
+            let used = sys_tokens
+                .saturating_add(tools_tokens)
+                .saturating_add(msg_tokens);
+            body.push("Оценка по размеру данных; реальный расход и состав инструментов зависят от модели.".into());
+            let window = agent.compaction.window.max(1);
             let free = window.saturating_sub(used);
             let ratio = (used as f64 / window as f64).clamp(0.0, 1.0);
             body.push(format!(
@@ -566,7 +602,6 @@ pub async fn execute_command(
             let segments = [
                 ("системный промпт", sys_tokens),
                 ("инструменты", tools_tokens),
-                ("файлы памяти", mem_tokens),
                 ("сообщения", msg_tokens),
                 ("свободно", free),
             ];
@@ -589,7 +624,7 @@ pub async fn execute_command(
                 }
                 .render(inner),
             );
-            "/compact сжать результаты инструментов"
+            "/compact сжать контекст"
         }
         "resume" => {
             let home_clone = home.clone();
