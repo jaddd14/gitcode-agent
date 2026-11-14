@@ -131,6 +131,7 @@ async fn interrupted_turn_keeps_request_completed_tools_and_marks_running_tool()
 
     let root = std::env::temp_dir().join(format!("gitcode-interrupt-test-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
     std::fs::write(root.join("example.txt"), "important discovery\n").unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
