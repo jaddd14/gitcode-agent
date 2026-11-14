@@ -269,22 +269,12 @@ async fn native_sessions_persist_and_recover_after_timeout() {
             assert!(!output.output.is_empty(), "{selection}: error output lost");
             // Exercise status at the user-script boundary, not just the outer
             // dot-source invocation. Final-command/pipeline status follows PS.
-            for command in [
-                "Write-Output 'кириллица'; throw 'terminating-regression'",
-                "Write-Output recovered # trailing comment",
-                "Write-Output first-line\nWrite-Output second-line",
-                "Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }",
-                "[pscustomobject]@{ Name='formatted-regression'; Value=42 }",
-            ] {
-                assert!(
-                    session
-                        .execute(&engine, command, Duration::from_secs(15))
-                        .await
-                        .is_err(),
-                    "{selection}: unsupported syntax must remain rejected: {command}"
-                );
-            }
             for (command, expected, text) in [
+                ("Write-Output 'кириллица'; throw 'terminating-regression'", 1, "terminating-regression"),
+                ("Write-Output recovered # trailing comment", 0, "recovered"),
+                ("Write-Output first-line\nWrite-Output second-line", 0, "second-line"),
+                ("Write-Output pipeline | ForEach-Object { Write-Error pipeline-regression }", 0, "pipeline-regression"),
+                ("[pscustomobject]@{ Name='formatted-regression'; Value=42 }", 0, "formatted-regression"),
                 ("Get-Item missing-terminating-regression -ErrorAction Stop", 1, "missing-terminating-regression"),                ("Write-Error nonterminating-regression", 1, "nonterminating-regression"),
                 ("cmd.exe /D /C exit 7", 7, ""),
                 ("Get-Item missing-native-shell-regression-file", 1, "missing-native-shell-regression-file"),
