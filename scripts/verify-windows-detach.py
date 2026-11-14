@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -148,6 +149,16 @@ def main():
             for name in names():
                 if name.startswith("gitcode-"):
                     mux("kill-session", "-t", name, check=False)
+            # Windows can keep the working directory busy briefly while killed
+            # shell and multiplexer processes exit. Do not hide a persistent leak.
+            deadline = time.monotonic() + 10
+            while project.exists():
+                try:
+                    shutil.rmtree(project)
+                except PermissionError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.2)
 
 
 if __name__ == "__main__":
