@@ -28,6 +28,11 @@ impl Pending {
         let mut rows = vec![String::new()];
         let mut used = 0;
         for grapheme in self.request.command.graphemes(true) {
+            if grapheme == "\n" || grapheme == "\r\n" {
+                rows.push(String::new());
+                used = 0;
+                continue;
+            }
             let cells = grapheme.width();
             if used + cells > limit && used > 0 {
                 rows.push(String::new());
@@ -275,6 +280,23 @@ mod tests {
         );
         let frame = p.frame(40, 5, ColorMode::None);
         assert!(frame.lines.join("\n").contains("Увеличь окно"));
+    }
+
+    #[test]
+    fn multiline_command_must_be_reviewed_through_the_last_line() {
+        let mut p = pending("first line\nsecond line\nthird line\nlast line", None);
+        let first = p.frame(40, 8, ColorMode::None).lines.join("\n");
+        assert!(first.contains("first line"));
+        assert!(!first.contains("last line"));
+        p.answer(&key(KeyCode::Down), 40, 8);
+        assert_eq!(p.answer(&key(KeyCode::Enter), 40, 8), None);
+        p.answer(&key(KeyCode::PageDown), 40, 8);
+        let last = p.frame(40, 8, ColorMode::None).lines.join("\n");
+        assert!(last.contains("last line"));
+        assert_eq!(
+            p.answer(&key(KeyCode::Enter), 40, 8),
+            Some(ShellApproval::Once)
+        );
     }
 
     #[test]

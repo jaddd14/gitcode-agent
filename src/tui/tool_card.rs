@@ -9,11 +9,28 @@ pub fn started(name: &str, input: &Value, width: usize) -> Vec<String> {
     let marker = if glyphs.ascii { "* " } else { "● " };
     let label = invocation(name, input);
     let width = width.max(3);
-    super::markdown::wrap_words(&label, width.saturating_sub(2).max(1))
+    let wrapped = super::markdown::wrap_words(&label, width.saturating_sub(2).max(1));
+    const MAX_ROWS: usize = 4;
+    let hidden = if wrapped.len() > MAX_ROWS {
+        wrapped.len() - (MAX_ROWS - 1)
+    } else {
+        0
+    };
+    let mut rows: Vec<_> = wrapped
         .into_iter()
+        .take(if hidden > 0 { MAX_ROWS - 1 } else { MAX_ROWS })
         .enumerate()
         .map(|(index, line)| format!("{}{line}", if index == 0 { marker } else { "  " }))
-        .collect()
+        .collect();
+    if hidden > 0 {
+        let more = if glyphs.ascii { "..." } else { "…" };
+        rows.push(widgets::ellipsis(
+            &format!("  {more} ещё {hidden} стр."),
+            width,
+            glyphs.ascii,
+        ));
+    }
+    rows
 }
 
 /// Render the result under its call. Keep indentation in command output intact.
@@ -386,5 +403,38 @@ mod tests {
             .iter()
             .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 20));
         assert!(rows.iter().all(|row| !row.contains('\u{1b}')));
+    }
+
+    #[test]
+    fn long_invocations_are_capped_and_count_hidden_screen_rows() {
+        let input =
+            json!({"command": (0..30).map(|i| format!("line_{i}")).collect::<Vec<_>>().join("\n")});
+        let label = invocation("Bash", &input);
+        let total = crate::tui::markdown::wrap_words(&label, 38).len();
+        let rows = started("Bash", &input, 40);
+        assert!(total > 4);
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].contains("Bash(line_0"));
+        assert!(rows[3].contains(&format!("{} стр.", total - 3)));
+        assert!(!rows.iter().any(|row| row.contains("line_29")));
+        assert!(rows
+            .iter()
+            .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 40));
+        assert_eq!(
+            input["command"].as_str().map(|text| text.lines().count()),
+            Some(30)
+        );
+    }
+
+    #[test]
+    fn short_invocations_and_other_tools_remain_readable() {
+        let short = started("Bash", &json!({"command":"git status"}), 80);
+        assert_eq!(short.len(), 1);
+        assert!(short[0].contains("Bash(git status)"));
+        let long_path = "nested/".repeat(100);
+        let rows = started("Read", &json!({"path":long_path}), 30);
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].contains("Read("));
+        assert!(rows[3].contains("стр."));
     }
 }

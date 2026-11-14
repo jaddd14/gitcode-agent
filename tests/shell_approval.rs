@@ -144,5 +144,6 @@ async fn approval_choices_remember_prefix_but_preserve_explicit_rules() {
         .count();
     assert_eq!(errors, 3);
     server.await.unwrap();
+    agent.tools.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
