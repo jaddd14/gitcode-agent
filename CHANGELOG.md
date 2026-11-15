@@ -2,6 +2,14 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] - 2026-11-15
+
+### Fixed
+
+- Shell commands run in independent sessions, wait ten seconds by default, and continue as named background tasks if still running. Completion wakes the idle interface without relying on a timing-sensitive status update. Shell state such as `cd` and `export` no longer persists between calls.
+- Parallel read and search results are displayed alongside their respective calls, and Grep's optional path restricts the actual search to that workspace file or directory.
+- Bypass mode now bypasses deny rules and the built-in sensitive-path block for native tools and shell commands, as its name promises. Workspace boundaries and editing consistency checks still apply.
+
 ## [0.4.1] - 2026-11-16
 
 ### Added

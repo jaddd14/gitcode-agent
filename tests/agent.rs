@@ -52,7 +52,7 @@ async fn scripted_read_then_answer_retains_tool_result() {
                 }
             }
             let body = if turn == 0 {
-                "data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"read_1\",\"name\":\"Read\",\"input\":{\"path\":\"example.txt\"}}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+                "data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"read_1\",\"name\":\"Read\",\"input\":{\"path\":\"example.txt\"}}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"grep_1\",\"name\":\"Grep\",\"input\":{\"pattern\":\"verified\"}}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
             } else {
                 "data: {\"type\":\"message_start\",\"message\":{}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Проверил файл.\"}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
             };
@@ -94,9 +94,18 @@ async fn scripted_read_then_answer_retains_tool_result() {
         .unwrap();
     drop(progress);
     let mut boundaries = Vec::new();
+    let mut tool_events = Vec::new();
     let mut previous_was_usage = false;
     while let Some(event) = receiver.recv().await {
         match event {
+            gitcode::provider::canonical::Event::ToolStarted { id, .. } => {
+                tool_events.push(format!("start:{id}"));
+                previous_was_usage = false;
+            }
+            gitcode::provider::canonical::Event::ToolFinished { id, .. } => {
+                tool_events.push(format!("finish:{id}"));
+                previous_was_usage = false;
+            }
             gitcode::provider::canonical::Event::Done { reason } => {
                 assert!(previous_was_usage, "request boundary requires final usage");
                 boundaries.push(reason);
@@ -107,6 +116,15 @@ async fn scripted_read_then_answer_retains_tool_result() {
         }
     }
     assert_eq!(boundaries, ["tool_use", "end_turn"]);
+    assert_eq!(
+        tool_events,
+        [
+            "start:read_1",
+            "finish:read_1",
+            "start:grep_1",
+            "finish:grep_1"
+        ]
+    );
     assert_eq!(outcome.text, "Проверил файл.");
     assert_eq!(outcome.requests, 2);
     assert!(outcome

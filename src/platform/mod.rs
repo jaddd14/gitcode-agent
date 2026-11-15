@@ -45,9 +45,9 @@ impl Shell {
     /// Model-facing description of the active quoting rules.
     pub fn description(&self) -> &'static str {
         match self.kind {
-            ShellKind::Bash => "Bash: POSIX single/double quoting; persistent cwd and environment.",
-            ShellKind::Pwsh | ShellKind::PowerShell => "PowerShell: single quotes are literal; backtick escapes; use Set-Location and $env:NAME. Persistent cwd and environment.",
-            ShellKind::Cmd => "cmd.exe: double quotes group paths; caret escapes; use cd /d and set NAME=value. Persistent cwd and environment.",
+            ShellKind::Bash => "Bash: POSIX single/double quoting; each command has its own cwd and environment.",
+            ShellKind::Pwsh | ShellKind::PowerShell => "PowerShell: single quotes are literal; backtick escapes; use Set-Location and $env:NAME. Each command has its own cwd and environment.",
+            ShellKind::Cmd => "cmd.exe: double quotes group paths; caret escapes; use cd /d and set NAME=value. Each command has its own cwd and environment.",
         }
     }
 }

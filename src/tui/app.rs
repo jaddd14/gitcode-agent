@@ -726,17 +726,19 @@ fn replay_rows(messages: &[Message], width: usize, theme: &Theme, mode: ColorMod
                     } else {
                         (name.as_str(), input)
                     };
-                    calls.insert(id.as_str(), name);
-                    let started =
-                        super::tool_card::started(name, input, width.saturating_sub(1).max(20));
-                    rows.extend(style_tool_rows(&started, true, false, theme, mode));
+                    calls.insert(id.as_str(), (name, input.clone()));
                 }
                 Content::ToolResult {
                     tool_use_id,
                     content,
                     is_error,
                 } => {
-                    let name = calls.remove(tool_use_id.as_str()).unwrap_or("Tool");
+                    let (name, input) = calls
+                        .remove(tool_use_id.as_str())
+                        .unwrap_or(("Tool", serde_json::Value::Null));
+                    let started =
+                        super::tool_card::started(name, &input, width.saturating_sub(1).max(20));
+                    rows.extend(style_tool_rows(&started, true, false, theme, mode));
                     rows.extend(completed_tool_rows(
                         name, content, *is_error, 0, width, theme, mode,
                     ));
@@ -745,6 +747,10 @@ fn replay_rows(messages: &[Message], width: usize, theme: &Theme, mode: ColorMod
                 Content::Thinking { .. } | Content::Image { .. } | Content::Document { .. } => {}
             }
         }
+    }
+    for (_, (name, input)) in calls {
+        let started = super::tool_card::started(name, &input, width.saturating_sub(1).max(20));
+        rows.extend(style_tool_rows(&started, true, false, theme, mode));
     }
     rows
 }
@@ -827,6 +833,35 @@ mod replay_tests {
     }
 
     #[test]
+    fn replay_pairs_parallel_searches_with_their_results() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    call("a", "Grep", json!({"pattern":"first"})),
+                    call("b", "Grep", json!({"pattern":"second"})),
+                ],
+            },
+            Message {
+                role: Role::User,
+                content: vec![
+                    result("a", "first result", false),
+                    result("b", "second result", false),
+                ],
+            },
+        ];
+        let rows = replay_rows(&messages, 80, &Theme::default(), ColorMode::None).join("\n");
+        let first = rows.find("Grep(first)").unwrap();
+        let first_result = rows.find("first result").unwrap();
+        let second = rows.find("Grep(second)").unwrap();
+        let second_result = rows.find("second result").unwrap();
+        assert!(
+            first < first_result && first_result < second && second < second_result,
+            "{rows}"
+        );
+    }
+
+    #[test]
     fn replay_normalizes_codex_command_calls_for_display_only() {
         for (name, input, command) in [
             (
@@ -903,7 +938,7 @@ mod replay_tests {
     }
 
     #[test]
-    fn replay_resolves_multiple_calls_by_id_and_keeps_block_order() {
+    fn replay_resolves_multiple_calls_by_id_in_result_order() {
         let messages = vec![
             Message::text(Role::System, "system instruction"),
             Message::text(Role::User, "user prompt"),
@@ -930,9 +965,9 @@ mod replay_tests {
         let positions: Vec<_> = [
             "user prompt",
             "before tools",
-            "Read(file.rs)",
             "Bash(false)",
             "Error: denied",
+            "Read(file.rs)",
             "Read 4 lines",
             "after tools",
         ]
@@ -1163,6 +1198,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     super::statusbar::update_context(&mut status, agent, &messages);
     let queue = InputQueue::default();
     let background_handles = agent.tools.background_handles();
+    let completion_notify = agent.tools.completion_notify();
     let mut exit_armed = false;
     let mut copy_deadline = None;
     loop {
@@ -1193,6 +1229,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 None => loop {
                     tokio::select! {
                         event = events.next() => match event { Some(event) => break Some(event?), None => return Ok(()) },
+                        _ = completion_notify.notified() => break None,
                         _ = tokio::time::sleep(Duration::from_millis(35)) => {
                             if renderer.scroll_pending() { break None; }
                             let count = background_count(&background_handles);
@@ -1239,7 +1276,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             };
             let rows = completed_tool_rows(
                 "Bash",
-                &format!("{status_text}\n{}", job.output),
+                &format!("{} finished: {status_text}\n{}", job.label, job.output),
                 job.is_error,
                 job.duration_ms,
                 renderer.size().0,
@@ -1248,7 +1285,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             );
             renderer.finalize_styled(&rows)?;
             let note = format!(
-                "[Фоновая задача {} завершилась: {status_text}]\n$ {}\n{}",
+                "[Background task {} finished: {status_text}]\n$ {}\n{}",
                 job.label, job.command, job.output
             );
             queue.push_with_image(note, None);

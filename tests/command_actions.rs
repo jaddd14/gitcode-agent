@@ -120,7 +120,7 @@ async fn command_actions_are_honest_permission_checked_and_isolated() {
         assert!(init.contains("не создан"));
         assert!(!workspace.join("GITCODE.md").exists());
     }
-    agent.tools.permissions.set_mode(Mode::Bypass);
+    agent.tools.permissions.set_mode(Mode::AcceptEdits);
     agent
         .tools
         .permissions
@@ -130,6 +130,12 @@ async fn command_actions_are_honest_permission_checked_and_isolated() {
         .await
         .contains("не создан"));
     assert!(!workspace.join("GITCODE.md").exists());
+    agent.tools.permissions.set_mode(Mode::Bypass);
+    assert!(run("/init", &mut agent, &mut messages, &mut status)
+        .await
+        .contains("Создан шаблон"));
+    std::fs::remove_file(workspace.join("GITCODE.md")).unwrap();
+    agent.tools.read_state.clear();
     agent.tools.permissions.deny.clear();
     agent.tools.permissions.set_mode(Mode::AcceptEdits);
     assert!(run("/init", &mut agent, &mut messages, &mut status)

@@ -375,7 +375,10 @@ fn retained_user_requests(messages: &[Message], window: u64) -> Vec<String> {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        if text.trim().is_empty() || text.starts_with("[Background subagent ") {
+        if text.trim().is_empty()
+            || text.starts_with("[Background subagent ")
+            || text.starts_with("[Background task ")
+        {
             continue;
         }
         let size = serde_json::to_vec(&text).map_or(usize::MAX, |v| v.len().saturating_add(1));

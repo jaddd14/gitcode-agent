@@ -810,17 +810,6 @@ impl Agent {
                     if let Some(checkpoint) = checkpoint {
                         checkpoint_tools(checkpoint, &messages, &results, &calls, Some(index));
                     }
-                    if let Some(progress) = progress {
-                        for (id, name, input) in &calls[index..end] {
-                            let _ = progress
-                                .send(Event::ToolStarted {
-                                    id: id.clone(),
-                                    name: name.clone(),
-                                    input: input.clone(),
-                                })
-                                .await;
-                        }
-                    }
                     let permissions = self.tools.permissions.clone();
                     let hooks = self.tools.hooks().to_vec();
                     let work = calls[index..end].iter().cloned().enumerate().map(
@@ -873,7 +862,7 @@ impl Agent {
                     let completed: Vec<_> = stream::iter(work).buffer_unordered(4).collect().await;
                     let mut completed = completed;
                     completed.sort_by_key(|item| item.0);
-                    for (_, id, name, result, state, duration_ms) in completed {
+                    for (offset, id, name, result, state, duration_ms) in completed {
                         self.tools.read_state.extend(state);
                         let (output, is_error) = match result {
                             Ok(text) => (text, false),
@@ -885,6 +874,13 @@ impl Agent {
                             is_error,
                         });
                         if let Some(progress) = progress {
+                            let _ = progress
+                                .send(Event::ToolStarted {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: calls[index + offset].2.clone(),
+                                })
+                                .await;
                             let _ = progress
                                 .send(Event::ToolFinished {
                                     id,
@@ -1559,7 +1555,11 @@ fn deliver_background(
             job.label, job.command, job.output
         );
         if note.len() > 20_000 {
-            note.truncate(20_000);
+            let mut end = 20_000;
+            while !note.is_char_boundary(end) {
+                end -= 1;
+            }
+            note.truncate(end);
             note.push_str("\n[output truncated]");
         }
         messages.push(Message::text(Role::User, note));

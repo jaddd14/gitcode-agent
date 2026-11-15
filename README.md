@@ -99,7 +99,7 @@ Use `gitcode --continue` or `/resume` to return to a session. `/import` can copy
 
 ## <img src="assets/icons/shield.svg" alt="" width="20" height="20"> Security and privacy
 
-Built-in file tools reject common sensitive paths such as `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.toml`, `.ssh` and `.aws`, including resolved symlink targets. This is a limited safeguard, not secret detection: other filenames can contain credentials, and approved shell commands or external processes run with your operating-system privileges. The agent is not an OS sandbox.
+Outside bypass mode, built-in file tools reject common sensitive paths such as `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.toml`, `.ssh` and `.aws`, including resolved symlink targets. This is a limited safeguard, not secret detection: other filenames can contain credentials, and approved shell commands or external processes run with your operating-system privileges. The agent is not an OS sandbox.
 
 Shell execution, workspace edits, web requests and MCP calls require permission in the default mode; headless operations requiring approval fail closed. `--dangerously-skip-permissions` skips prompts and should only be used in an environment you control. Prompt injection remains a risk. Conversations and tool results are sent to the selected provider when needed and are persisted locally; review the provider's data policies and avoid placing secrets in prompts.
 

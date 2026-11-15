@@ -133,12 +133,14 @@ done
     let input = json!({"server":"local","tool":"echo","arguments":{}});
     assert_eq!(tools.execute("McpCall", &input).await.unwrap(), "call-2");
     assert_eq!(tools.execute("McpCall", &input).await.unwrap(), "call-3");
+    tools.permissions.set_mode(Mode::Default);
     tools
         .permissions
         .deny
         .push(Rule::parse("McpCall(*)").unwrap());
     assert!(tools.execute("McpCall", &input).await.is_err());
     tools.permissions.deny.clear();
+    tools.permissions.set_mode(Mode::Bypass);
     assert_eq!(tools.execute("McpCall", &input).await.unwrap(), "call-4");
     assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
     add_mcp_server(&path, "local", make_config("two")).unwrap();

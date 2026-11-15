@@ -23,8 +23,6 @@ pub struct Tools {
     pub permissions: Engine,
     /// Last observed file bytes; mutations must compare before overwriting.
     pub read_state: BTreeMap<PathBuf, Vec<u8>>,
-    /// Lazily initialized persistent shell session.
-    shell_session: Option<shell::Session>,
     /// Active background shell jobs indexed by job identifier.
     jobs: BTreeMap<String, shell::Job>,
     /// Monotonic counter for background shell job identifiers.
@@ -32,6 +30,7 @@ pub struct Tools {
     job_handles: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
     /// Results of background jobs that finished on their own, awaiting delivery to the model.
     completed: Arc<Mutex<Vec<BackgroundCompletion>>>,
+    completion_notify: Arc<tokio::sync::Notify>,
     /// Human-readable label and command for each live job.
     job_labels: BTreeMap<String, (String, String)>,
     todos: crate::agent::agency::TodoList,
@@ -104,13 +103,7 @@ impl Tools {
     }
 
     /// Adopt a job that already started as a foreground command and keep reporting it.
-    async fn adopt_background(
-        &mut self,
-        job: shell::Job,
-        command: &str,
-        _timeout: Duration,
-        _permissions: &Engine,
-    ) -> Result<String, String> {
+    async fn adopt_background(&mut self, job: shell::Job, command: &str) -> Result<String, String> {
         let watch = job.completion_watch();
         Ok(self.spawn_watcher(job, watch, command))
     }
@@ -135,6 +128,7 @@ impl Tools {
             .insert(job_id.clone(), (label.clone(), command.to_owned()));
         self.jobs.insert(job_id.clone(), job);
         let completed = self.completed.clone();
+        let completion_notify = self.completion_notify.clone();
         let watcher_label = label.clone();
         let watcher_command = command.to_owned();
         tokio::spawn(async move {
@@ -151,6 +145,9 @@ impl Tools {
             if !text.is_empty() && !text.ends_with('\n') {
                 text.push('\n');
             }
+            if outcome.truncated {
+                text.push_str("[output truncated]\n");
+            }
             text.push_str(&format!("[{describe}]"));
             completed
                 .lock()
@@ -164,6 +161,7 @@ impl Tools {
                     timed_out: outcome.timed_out,
                     duration_ms: outcome.elapsed_ms,
                 });
+            completion_notify.notify_one();
         });
         label
     }
@@ -175,11 +173,11 @@ impl Tools {
         Self {
             permissions,
             read_state: BTreeMap::new(),
-            shell_session: None,
             jobs: BTreeMap::new(),
             next_job_id: 1,
             job_handles: Arc::new(Mutex::new(Vec::new())),
             completed: Arc::new(Mutex::new(Vec::new())),
+            completion_notify: Arc::new(tokio::sync::Notify::new()),
             job_labels: BTreeMap::new(),
             todos: crate::agent::agency::TodoList::new(),
             approved_shell_prefixes: Vec::new(),
@@ -204,6 +202,11 @@ impl Tools {
         self.job_handles.clone()
     }
 
+    /// Wake the interactive loop when a result is ready, including while idle.
+    pub fn completion_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.completion_notify.clone()
+    }
+
     /// Take every background result that arrived since the last call.
     ///
     /// The agent drains this at each request boundary, so completion reaches the
@@ -223,17 +226,13 @@ impl Tools {
         })
     }
 
-    /// Stop owned background jobs and reap the persistent interpreter before
-    /// releasing its workspace (Windows processes hold their current directory).
+    /// Stop owned background jobs before releasing their workspace.
     pub async fn shutdown(&mut self) -> Result<(), String> {
         for (_, (_, session)) in std::mem::take(&mut self.mcp_stdio) {
             session.close().await;
         }
         for (_, job) in std::mem::take(&mut self.jobs) {
             job.kill().await?;
-        }
-        if let Some(session) = self.shell_session.take() {
-            session.close().await;
         }
         Ok(())
     }
@@ -285,13 +284,13 @@ impl Tools {
             tool(
                 "Grep",
                 "Search workspace text files using a Rust regular expression.",
-                json!({"pattern":{"type":"string"},"ignore_case":{"type":"boolean"},"glob":{"type":"string"},"head_limit":{"type":"integer","minimum":1}}),
+                json!({"pattern":{"type":"string"},"path":{"type":"string","description":"File or directory within the workspace to search"},"ignore_case":{"type":"boolean"},"glob":{"type":"string"},"head_limit":{"type":"integer","minimum":1}}),
                 &["pattern"],
             ),
             tool(
                 "Bash",
-                "Execute a command in a persistent non-interactive shell. A command still running after yield_time_ms becomes a background task; its result is delivered into the conversation automatically when it finishes, so do not poll for it. Use run_in_background for long independent work.",
-                json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1},"yield_time_ms":{"type":"integer","minimum":1,"maximum":60000},"run_in_background":{"type":"boolean"}}),
+                "Execute a command in its own non-interactive shell, starting in the workspace. Each call is independent: cd and export do not persist between calls. Wait up to 10 seconds by default (adjust with yield_time_ms); if still running, return a background task label and automatically report its result. Use run_in_background for long independent work. Set timeout_seconds to limit total runtime. Do not poll for background results.",
+                json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1},"yield_time_ms":{"type":"integer","minimum":250,"maximum":30000},"run_in_background":{"type":"boolean"}}),
                 &["command"],
             ),
             tool(
@@ -303,14 +302,9 @@ impl Tools {
         ]
     }
 
-    fn ensure_shell(&mut self) -> Result<shell::Session, String> {
-        if let Some(session) = &self.shell_session {
-            return Ok(session.clone());
-        }
+    fn new_shell(&self) -> Result<shell::Session, String> {
         let home = crate::platform::home_dir().unwrap_or_else(|| self.permissions.root.clone());
-        let session = shell::Session::with_shell(&self.permissions, &home, &self.shell_selection)?;
-        self.shell_session = Some(session.clone());
-        Ok(session)
+        shell::Session::with_shell(&self.permissions, &home, &self.shell_selection)
     }
 
     /// Remove remembered command approvals when a new conversation starts.
@@ -372,6 +366,8 @@ impl Tools {
         input: &Value,
         approved: bool,
     ) -> Result<String, String> {
+        self.jobs.retain(|_, job| !job.is_finished());
+        self.job_labels.retain(|id, _| self.jobs.contains_key(id));
         match name {
             "TodoWrite" => return self.todos.update_from_value(input),
             "McpCall" => {
@@ -491,6 +487,9 @@ impl Tools {
                 .map(bound);
             }
             "Bash" => {
+                if self.jobs.len() >= 64 {
+                    return Err("too many running background commands; wait for one to finish or use KillShell".into());
+                }
                 let command = required(input, "command")?;
                 let mut shell_permissions = self.permissions.clone();
                 if approved {
@@ -513,13 +512,7 @@ impl Tools {
                     .map(Duration::from_secs)
                     .unwrap_or(Duration::MAX);
                 if input["run_in_background"].as_bool().unwrap_or(false) {
-                    let home = crate::platform::home_dir()
-                        .unwrap_or_else(|| self.permissions.root.clone());
-                    let bg_session = shell::Session::with_shell(
-                        &self.permissions,
-                        &home,
-                        &self.shell_selection,
-                    )?;
+                    let bg_session = self.new_shell()?;
                     let label = self
                         .register_background(&bg_session, command, timeout, &shell_permissions)
                         .await?;
@@ -527,20 +520,21 @@ impl Tools {
                         "Started background command {label} (`{command}`). Its result will appear in the conversation automatically; continue with other work meanwhile. Use KillShell to stop it."
                     ));
                 }
-                let session = self.ensure_shell()?;
+                let session = self.new_shell()?;
                 let mut job = session
                     .background(&shell_permissions, command, timeout)
                     .await?;
-                let wait = input["yield_time_ms"]
-                    .as_u64()
-                    .unwrap_or(1000)
-                    .clamp(1, 60_000);
+                let wait = input["yield_time_ms"].as_u64().unwrap_or(10_000);
+                let wait = if cfg!(windows) {
+                    wait.max(10_000)
+                } else {
+                    wait
+                };
+                let wait = wait.clamp(250, 30_000);
                 job.wait_ready(Duration::from_millis(wait)).await;
                 if !job.is_finished() {
                     let initial = job.poll()?;
-                    let label = self
-                        .adopt_background(job, command, timeout, &shell_permissions)
-                        .await?;
+                    let label = self.adopt_background(job, command).await?;
                     return Ok(bound(format!(
                         "Command still running as background task {label}. Its result will appear in the conversation automatically; continue with other work meanwhile.\n{initial}"
                     )));
@@ -735,6 +729,14 @@ fn bound(mut output: String) -> String {
 
 fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Result<String, String> {
     let pattern = required(input, "pattern")?;
+    let search_root = if name == "Grep" {
+        input["path"]
+            .as_str()
+            .map(|path| permissions.existing(Path::new(path)))
+            .transpose()?
+    } else {
+        None
+    };
     let glob = if name == "Glob" {
         Some(pattern)
     } else {
@@ -759,7 +761,7 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
     };
     let mut output = Vec::new();
     let limit = input["head_limit"].as_u64().unwrap_or(1000).min(10000) as usize;
-    for entry in ignore::WalkBuilder::new(root)
+    for entry in ignore::WalkBuilder::new(search_root.as_deref().unwrap_or(root))
         .hidden(false)
         .follow_links(false)
         .build()

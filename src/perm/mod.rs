@@ -109,7 +109,7 @@ pub struct Engine {
     pub root: PathBuf,
     /// Additional explicitly authorized workspace directories.
     pub additional_roots: Vec<PathBuf>,
-    /// Explicit deny rules take highest precedence.
+    /// Explicit deny rules take precedence outside bypass mode.
     pub deny: Vec<Rule>,
     /// Explicit ask rules precede allow rules.
     pub ask: Vec<Rule>,
@@ -194,6 +194,10 @@ impl Engine {
 
     /// Decide using rule precedence and a read-only plan boundary.
     pub fn decide(&self, tool: &str, resource: &str, mutating: bool) -> Decision {
+        let mode = self.mode();
+        if mode == Mode::Bypass {
+            return Decision::Allow;
+        }
         if matches!(
             tool,
             "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "apply_patch"
@@ -204,12 +208,8 @@ impl Engine {
         if self.deny.iter().any(|r| r.matches(tool, resource)) {
             return Decision::Deny;
         }
-        let mode = self.mode();
         if mode == Mode::Plan && mutating {
             return Decision::Deny;
-        }
-        if mode == Mode::Bypass {
-            return Decision::Allow;
         }
         if self.ask.iter().any(|r| r.matches(tool, resource)) {
             return Decision::Ask;
@@ -278,13 +278,13 @@ fn sensitive_path(resource: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn deny_and_plan_override_allow() {
+    fn deny_and_plan_override_allow_but_bypass_overrides_deny() {
         let mut e = Engine::new(Path::new("."), Mode::Plan).unwrap();
         e.allow.push(Rule::parse("Edit(**)").unwrap());
         assert_eq!(e.decide("Edit", "src/a.rs", true), Decision::Deny);
         e.set_mode(Mode::Bypass);
         e.deny.push(Rule::parse("Read(**/secret)").unwrap());
-        assert_eq!(e.decide("Read", "a/secret", false), Decision::Deny);
+        assert_eq!(e.decide("Read", "a/secret", false), Decision::Allow);
     }
     #[test]
     fn mode_switch_reaches_existing_clones_mid_turn() {

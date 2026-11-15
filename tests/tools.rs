@@ -8,6 +8,30 @@ use gitcode::{
 use serde_json::json;
 
 #[tokio::test]
+async fn grep_path_limits_search_to_file_or_directory_and_cannot_escape() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("src")).unwrap();
+    std::fs::write(root.path().join("src/inside.txt"), "needle inside\n").unwrap();
+    std::fs::write(root.path().join("outside.txt"), "needle outside\n").unwrap();
+    let mut tools = Tools::new(Engine::new(root.path(), Mode::Default).unwrap());
+    for path in ["src", "src/inside.txt"] {
+        let output = tools
+            .execute("Grep", &json!({"pattern":"needle", "path":path}))
+            .await
+            .unwrap();
+        assert!(
+            output.contains("src/inside.txt:1:needle inside"),
+            "{output}"
+        );
+        assert!(!output.contains("outside"));
+    }
+    assert!(tools
+        .execute("Grep", &json!({"pattern":"needle", "path":"/etc"}))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn read_search_and_deny_rules() {
     let root = std::env::temp_dir().join(format!("gitcode-tools-{}", std::process::id()));
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -108,7 +132,23 @@ async fn sensitive_files_are_not_exposed_by_native_reads_or_search() {
     assert!(tools
         .execute("Read", &json!({"path":".env"}))
         .await
-        .is_err());
+        .unwrap()
+        .contains("fixture-secret-marker"));
+}
+
+#[tokio::test]
+async fn bypass_allows_workspace_writes_despite_deny_rules() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".probe")).unwrap();
+    let mut engine = Engine::new(root.path(), Mode::Bypass).unwrap();
+    engine.deny.push(Rule::parse("Write(**)").unwrap());
+    let mut tools = Tools::new(engine);
+    let target = root.path().join(".probe/nineaws_who.py");
+    tools
+        .execute("Write", &json!({"path":target, "content":"print('ok')\n"}))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "print('ok')\n");
 }
 
 #[tokio::test]

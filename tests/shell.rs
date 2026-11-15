@@ -167,21 +167,21 @@ async fn permissions_fail_closed_before_any_side_effect() {
         .session
         .execute(&f.engine, "pwd && touch denied", LIMIT)
         .await
-        .is_err());
+        .is_ok());
     assert!(f
         .session
         .execute(&f.engine, "touch complex > out", LIMIT)
         .await
-        .is_err());
+        .is_ok());
     f.engine.deny.clear();
     f.engine.deny.push(Rule::parse("Bash(pwd; pwd)").unwrap());
     assert!(f
         .session
         .execute(&f.engine, "pwd; pwd", LIMIT)
         .await
-        .is_err());
+        .is_ok());
     assert!(!f.root.join("asked").exists());
-    assert!(!f.root.join("denied").exists());
+    assert!(f.root.join("denied").exists());
     f.session.close().await;
 }
 
@@ -194,6 +194,7 @@ async fn ordinary_bash_syntax_works_and_complex_rules_fail_closed() {
     let result = f.run("for f in result; do cat \"$f\"; done").await;
     assert_eq!(result.exit_code, Some(0));
     assert!(result.output.contains("hello world"));
+    f.engine.set_mode(Mode::Default);
     f.engine
         .deny
         .push(Rule::parse("Bash(touch blocked)").unwrap());
@@ -447,11 +448,79 @@ async fn background_result_arrives_without_polling() {
 }
 
 #[tokio::test]
-async fn long_foreground_command_yields_and_preserves_shell_session() {
+async fn ordinary_command_waits_and_background_completion_wakes_listener() {
     let f = Fixture::new(Mode::Bypass);
     let mut tools = gitcode::tools::Tools::new(f.engine.clone());
-    let start = tools.execute("Bash", &serde_json::json!({"command":"export GITCODE_YIELD_TEST=works; printf early; sleep 0.2; printf late", "yield_time_ms":20})).await.unwrap();
+    let output = tools
+        .execute(
+            "Bash",
+            &serde_json::json!({"command":"sleep 1.2; printf finished"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output, "finished");
+    assert!(tools.take_completed().is_empty());
+
+    let notify = tools.completion_notify();
+    tools
+        .execute(
+            "Bash",
+            &serde_json::json!({"command":"sleep 0.1; printf notified", "run_in_background":true}),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), notify.notified())
+        .await
+        .unwrap();
+    let completed = tools.take_completed();
+    assert_eq!(completed.len(), 1);
+    assert!(completed[0].output.contains("notified"));
+    assert!(tools.take_completed().is_empty());
+    tools.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn default_wait_yields_long_command_and_reports_completion() {
+    let f = Fixture::new(Mode::Bypass);
+    let mut tools = gitcode::tools::Tools::new(f.engine.clone());
+    let notify = tools.completion_notify();
+    let start = tokio::time::timeout(
+        Duration::from_secs(12),
+        tools.execute(
+            "Bash",
+            &serde_json::json!({"command":"sleep 11; printf default-finished"}),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(start.contains("background task"), "{start}");
+    tokio::time::timeout(Duration::from_secs(5), notify.notified())
+        .await
+        .unwrap();
+    let completed = tools.take_completed();
+    assert_eq!(completed.len(), 1);
+    assert!(completed[0].output.contains("default-finished"));
+    tools.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn yielded_command_does_not_block_next_command_or_share_shell_state() {
+    let f = Fixture::new(Mode::Bypass);
+    let mut tools = gitcode::tools::Tools::new(f.engine.clone());
+    let start = tools.execute("Bash", &serde_json::json!({"command":"export GITCODE_YIELD_TEST=works; printf early; sleep 1.5; printf late", "yield_time_ms":250})).await.unwrap();
+    assert!(start.contains("background task"), "{start}");
+    let env = tokio::time::timeout(
+        Duration::from_millis(800),
+        tools.execute(
+            "Bash",
+            &serde_json::json!({"command":"printenv GITCODE_YIELD_TEST"}),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(env.contains("[exit code: 1]"), "{env}");
     let mut collected = Vec::new();
     for _ in 0..100 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -466,13 +535,5 @@ async fn long_foreground_command_yields_and_preserves_shell_session() {
         "{}",
         collected[0].output
     );
-    let env = tools
-        .execute(
-            "Bash",
-            &serde_json::json!({"command":"printenv GITCODE_YIELD_TEST"}),
-        )
-        .await
-        .unwrap();
-    assert_eq!(env.trim(), "works");
     tools.shutdown().await.unwrap();
 }

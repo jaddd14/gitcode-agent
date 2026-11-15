@@ -42,8 +42,8 @@ We follow **coordinated vulnerability disclosure**. Once a fix is verified and r
 ### In Scope
 
 - **Workspace confinement escapes**: bypassing canonical path checks in file tools (`Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `apply_patch`, `LS`, `Glob`, `Grep`) or `@import` memory instructions via symlinks, relative traversal (`..`), or race conditions.
-- **Permission engine bypasses**: executing denied tools, bypassing rule evaluation precedence (`Deny` > `Ask` > `Allow`), or circumventing read-only enforcement in `Plan` mode.
-- **Command splitter bypasses**: tricking the conservative shell command parser (`src/tools/shell.rs`) into auto-approving compound or subshell constructs (`$(...)`, backticks, redirections, pipelines, control operators) under a simple prefix allow rule.
+- **Permission engine bypasses**: outside bypass mode, executing denied tools, bypassing rule evaluation precedence (`Deny` > `Ask` > `Allow`), or circumventing read-only enforcement in `Plan` mode.
+- **Command splitter bypasses**: outside bypass mode, tricking the conservative shell command parser (`src/tools/shell.rs`) into auto-approving compound or subshell constructs (`$(...)`, backticks, redirections, pipelines, control operators) under a simple prefix allow rule.
 - **Credential & secret leakage**: exposing API keys, bearer tokens, or private headers in JSONL logs, session transcripts, error messages, or terminal redraws, or creating credential/session files without strict `0600`/`0700` Unix permissions.
 - **Prompt-injection-driven tool abuse**: untrusted repository files or tool outputs escalating privileges without matching explicit `Allow` rules or user confirmation.
 
@@ -58,13 +58,13 @@ We follow **coordinated vulnerability disclosure**. Once a fix is verified and r
 `gitcode` is a local-first terminal coding agent that interacts with local files and shell processes. Its defense-in-depth architecture relies on four core mechanisms and carries explicit boundaries users must understand:
 
 1. **Permission Engine (`src/perm/mod.rs`)**
-   - Every tool invocation is classified into `ReadOnly`, `WorkspaceWrite`, `ShellExec`, or `Network` and evaluated against layered rules in strict precedence: **`Deny` overrides `Ask`, and `Ask` overrides `Allow`**.
+   - Outside bypass mode, tool invocations are evaluated against layered rules in strict precedence: **`Deny` overrides `Ask`, and `Ask` overrides `Allow`**.
    - Operating modes constrain default behavior:
      - `Plan`: allows `ReadOnly` operations only; all writes and shell executions are denied.
      - `Default`: allows `ReadOnly` inside the workspace and requires approval (`Ask`) for workspace writes, shell execution, and network access.
      - `AcceptEdits`: permits workspace file edits while still gating shell execution and external paths.
-     - `Yolo` (`--dangerously-skip-permissions`): bypasses interactive prompts unless an explicit `Deny` rule matches.
-   - Native file tools deny paths containing `.env`, `.env.*`, `*.pem`, `*.key`, `.ssh`, `.aws`, or `credentials.toml`, including resolved read paths. This remains active in bypass mode. Other filenames can still contain secrets; approved shell commands and external processes are not confined by these rules.
+     - `Yolo` (`--dangerously-skip-permissions`): bypasses permission rules and built-in sensitive-path blocks.
+   - Outside bypass mode, native file tools deny paths containing `.env`, `.env.*`, `*.pem`, `*.key`, `.ssh`, `.aws`, or `credentials.toml`, including resolved read paths. Other filenames can still contain secrets; approved shell commands and external processes are not confined by these rules.
 
 2. **Workspace Path Confinement (`src/tools/mod.rs`, `src/session/memory.rs`)**
    - Built-in file inspection, editing, and hierarchical `GITCODE.md`/`CLAUDE.md`/`AGENTS.md` `@import` expansion resolve paths against the canonical workspace root.
