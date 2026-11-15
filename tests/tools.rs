@@ -8,7 +8,7 @@ use gitcode::{
 use serde_json::json;
 
 #[tokio::test]
-async fn grep_path_limits_search_to_file_or_directory_and_cannot_escape() {
+async fn grep_path_limits_search_to_file_or_directory() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("src")).unwrap();
     std::fs::write(root.path().join("src/inside.txt"), "needle inside\n").unwrap();
@@ -25,10 +25,13 @@ async fn grep_path_limits_search_to_file_or_directory_and_cannot_escape() {
         );
         assert!(!output.contains("outside"));
     }
+    let external = tempfile::tempdir().unwrap();
+    std::fs::write(external.path().join("external.txt"), "needle external").unwrap();
     assert!(tools
-        .execute("Grep", &json!({"pattern":"needle", "path":"/etc"}))
+        .execute("Grep", &json!({"pattern":"needle", "path":external.path()}))
         .await
-        .is_err());
+        .unwrap()
+        .contains("needle external"));
 }
 
 #[tokio::test]
@@ -95,45 +98,117 @@ async fn read_search_and_deny_rules() {
         assert!(tools
             .permissions
             .existing(&root.join("escape/passwd"))
-            .is_err());
+            .is_ok());
     }
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
-async fn sensitive_files_are_not_exposed_by_native_reads_or_search() {
+async fn sensitive_filenames_are_accessible_in_all_modes() {
     let root = tempfile::tempdir().unwrap();
     for path in [".env", ".env.production", "private.key", "credentials.toml"] {
-        std::fs::write(root.path().join(path), "fixture-secret-marker").unwrap();
+        std::fs::write(root.path().join(path), "fixture-marker").unwrap();
     }
-    std::fs::write(root.path().join("visible.txt"), "ordinary-marker").unwrap();
-    let mut tools = Tools::new(Engine::new(root.path(), Mode::Default).unwrap());
-    for path in [".env", ".env.production", "private.key", "credentials.toml"] {
-        assert!(tools.execute("Read", &json!({"path": path})).await.is_err());
+    for mode in [Mode::Default, Mode::AcceptEdits, Mode::Plan, Mode::Bypass] {
+        let mut tools = Tools::new(Engine::new(root.path(), mode).unwrap());
+        for path in [".env", ".env.production", "private.key", "credentials.toml"] {
+            assert!(tools
+                .execute("Read", &json!({"path":path}))
+                .await
+                .unwrap()
+                .contains("fixture-marker"));
+        }
+        assert!(tools
+            .execute("Grep", &json!({"pattern":"fixture-marker"}))
+            .await
+            .unwrap()
+            .contains("fixture-marker"));
     }
-    assert!(!tools
-        .execute("Grep", &json!({"pattern":"fixture-secret-marker"}))
+}
+
+#[tokio::test]
+async fn external_files_are_accessible_without_workspace_authorization() {
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().join("workspace");
+    let outside = base.path().join("external");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    let target = outside.join("file.txt");
+    std::fs::write(&target, "before\n").unwrap();
+    let mut tools = Tools::new(Engine::new(&root, Mode::Default).unwrap());
+    assert!(tools.permissions.existing(&target).is_ok());
+    tools.permissions.set_mode(Mode::AcceptEdits);
+    // Read-before-write is still required even for external files.
+    assert!(tools
+        .execute("Write", &json!({"path":target,"content":"lost"}))
+        .await
+        .is_err());
+    tools
+        .execute("Read", &json!({"path":target}))
+        .await
+        .unwrap();
+    tools
+        .execute(
+            "Edit",
+            &json!({"path":target,"old_string":"before","new_string":"after"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "after\n");
+    tools
+        .execute(
+            "Write",
+            &json!({"path":outside.join("nested/new.txt"),"content":"created"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(outside.join("nested/new.txt")).unwrap(),
+        "created"
+    );
+    assert!(tools
+        .execute("LS", &json!({"path":outside}))
         .await
         .unwrap()
-        .contains("fixture-secret-marker"));
+        .contains("file.txt"));
     assert!(tools
-        .execute("Read", &json!({"path":"visible.txt"}))
+        .execute("Glob", &json!({"path":outside,"pattern":"*.txt"}))
         .await
-        .is_ok());
+        .unwrap()
+        .contains("file.txt"));
+    assert!(tools
+        .execute("Grep", &json!({"path":outside,"pattern":"after"}))
+        .await
+        .unwrap()
+        .contains("after"));
+    tools.execute("apply_patch", &json!({"patch":format!("*** Begin Patch\n*** Add File: {}\n+patched\n*** End Patch", outside.join("patched.txt").display())})).await.unwrap();
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(".env", root.path().join("alias.txt")).unwrap();
-        assert!(tools
-            .execute("Read", &json!({"path":"alias.txt"}))
+        std::os::unix::fs::symlink(&outside, root.join("alias")).unwrap();
+        tools
+            .execute("Read", &json!({"path":"alias/file.txt"}))
             .await
-            .is_err());
+            .unwrap();
     }
-    tools.permissions.set_mode(Mode::Bypass);
-    assert!(tools
-        .execute("Read", &json!({"path":".env"}))
-        .await
-        .unwrap()
-        .contains("fixture-secret-marker"));
+    for mode in [Mode::Default, Mode::AcceptEdits, Mode::Plan] {
+        tools.permissions.set_mode(mode);
+        assert!(tools.execute("Read", &json!({"path":target})).await.is_ok());
+        let write = tools
+            .execute(
+                "Write",
+                &json!({"path":outside.join("approved.txt"),"content":"approved"}),
+            )
+            .await;
+        if mode == Mode::AcceptEdits {
+            assert!(write.is_ok());
+        } else {
+            assert!(write.is_err()); // Approval / Plan policy, not path confinement.
+        }
+        assert!(tools
+            .execute("Grep", &json!({"path":outside,"pattern":"after"}))
+            .await
+            .is_ok());
+    }
 }
 
 #[tokio::test]
@@ -223,7 +298,7 @@ async fn approved_edit_never_overrides_explicit_deny_or_plan_mode() {
 }
 
 #[tokio::test]
-async fn explicitly_added_directory_supports_read_and_edit_without_opening_siblings() {
+async fn additional_directories_are_optional_not_access_boundaries() {
     let base = std::env::temp_dir().join(format!("gitcode-extra-root-{}", std::process::id()));
     let root = base.join("project");
     let extra = base.join("extra");
@@ -235,9 +310,9 @@ async fn explicitly_added_directory_supports_read_and_edit_without_opening_sibli
     std::fs::write(&target, "before").unwrap();
     std::fs::write(sibling.join("secret.txt"), "secret").unwrap();
     let mut engine = Engine::new(&root, Mode::AcceptEdits).unwrap();
-    assert!(engine.existing(&target).is_err());
+    assert!(engine.existing(&target).is_ok());
     engine.add_workspace(&extra).unwrap();
-    assert!(engine.existing(&sibling.join("secret.txt")).is_err());
+    assert!(engine.existing(&sibling.join("secret.txt")).is_ok());
     let mut tools = Tools::new(engine);
     tools
         .execute("Read", &json!({"path":target}))

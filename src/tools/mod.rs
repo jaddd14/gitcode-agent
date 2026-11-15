@@ -258,33 +258,33 @@ impl Tools {
             tool("WebFetch", "Fetch an explicitly authorized HTTP URL as untrusted text; network permission is required.", json!({"url":{"type":"string"}}), &["url"]),
             tool("Skill", "Load an installed skill by its registered name; its content does not override permission policy.", json!({"name":{"type":"string"}}), &["name"]),
             tool("TodoWrite", "Replace the task list with current progress.", json!({"todos":{"type":"array","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]},"activeForm":{"type":"string"}},"required":["content","status"]}}}), &["todos"]),
-            tool("Write", "Atomically write workspace text. Existing files must be read first; approval is required.", json!({"path":{"type":"string"},"content":{"type":"string"}}), &["path","content"]),
+            tool("Write", "Atomically write text at any filesystem path. Existing files must be read first; approval is required.", json!({"path":{"type":"string"},"content":{"type":"string"}}), &["path","content"]),
             tool("Edit", "Replace exact unique text in a previously read file.", json!({"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}}), &["path","old_string","new_string"]),
             tool("MultiEdit", "Apply an ordered atomic batch of exact replacements to one previously read file.", json!({"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["old_string","new_string"],"additionalProperties":false}}}), &["path","edits"]),
             tool("NotebookEdit", "Edit a previously read notebook cell, preserving notebook metadata.", json!({"path":{"type":"string"},"cell_id":{"type":"string"},"cell_number":{"type":"integer","minimum":0},"edit_mode":{"type":"string","enum":["replace","insert","delete"]},"cell_type":{"type":"string","enum":["code","markdown","raw"]},"new_source":{"type":"string"}}), &["path","edit_mode"]),
             tool("apply_patch", "Apply a Codex Begin Patch / End Patch document. Read existing files first.", json!({"patch":{"type":"string"}}), &["patch"]),
             tool(
                 "Read",
-                "Read an existing workspace text file with numbered lines. Read before editing.",
+                "Read an existing text file at any filesystem path with numbered lines. Read before editing.",
                 json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}}),
                 &["path"],
             ),
             tool(
                 "LS",
-                "List an existing workspace directory.",
+                "List any existing filesystem directory.",
                 json!({"path":{"type":"string"}}),
                 &["path"],
             ),
             tool(
                 "Glob",
-                "Find workspace files by glob, respecting ignore files.",
-                json!({"pattern":{"type":"string"}}),
+                "Find files by glob in the optional path (workspace by default), respecting ignore files.",
+                json!({"pattern":{"type":"string"},"path":{"type":"string"}}),
                 &["pattern"],
             ),
             tool(
                 "Grep",
-                "Search workspace text files using a Rust regular expression.",
-                json!({"pattern":{"type":"string"},"path":{"type":"string","description":"File or directory within the workspace to search"},"ignore_case":{"type":"boolean"},"glob":{"type":"string"},"head_limit":{"type":"integer","minimum":1}}),
+                "Search text files using a Rust regular expression; paths outside the workspace are allowed.",
+                json!({"pattern":{"type":"string"},"path":{"type":"string","description":"File or directory to search (workspace by default)"},"ignore_case":{"type":"boolean"},"glob":{"type":"string"},"head_limit":{"type":"integer","minimum":1}}),
                 &["pattern"],
             ),
             tool(
@@ -625,13 +625,11 @@ impl Tools {
                 let path = self
                     .permissions
                     .existing(Path::new(required(input, "path")?))?;
-                let root = self
+                let relative = self
                     .permissions
                     .workspace_for(&path)
-                    .ok_or("invalid read boundary")?;
-                let relative = path
-                    .strip_prefix(root)
-                    .map_err(|_| "invalid read boundary")?;
+                    .and_then(|root| path.strip_prefix(root).ok())
+                    .unwrap_or(&path);
                 for resource in [path.to_string_lossy(), relative.to_string_lossy()] {
                     if self.permissions.decide("Read", &resource, false) != Decision::Allow {
                         return Err("permission denied for resolved read path".into());
@@ -771,16 +769,15 @@ fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Resul
             continue;
         }
         let path = entry.path();
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| "invalid search boundary")?;
-        if relative.components().any(|c| c.as_os_str() == ".git") {
-            continue;
-        }
+        let relative = path.strip_prefix(root).unwrap_or(path);
         if permissions.decide("Read", &relative.to_string_lossy(), false) != Decision::Allow {
             continue;
         }
-        if glob.as_ref().is_some_and(|g| !g.is_match(relative)) {
+        let match_path = search_root
+            .as_deref()
+            .and_then(|base| path.strip_prefix(base).ok())
+            .unwrap_or(relative);
+        if glob.as_ref().is_some_and(|g| !g.is_match(match_path)) {
             continue;
         }
         // Search results use a stable slash-separated display on every platform.

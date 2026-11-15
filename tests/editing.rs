@@ -238,29 +238,42 @@ fn mutation_permissions_use_real_tool_and_mutating_flag() {
 }
 
 #[test]
-fn rejects_parent_traversal_and_workspace_root() {
+fn allows_parent_paths_but_rejects_directory_and_empty_targets() {
     let mut w = Workspace::new();
-    for path in ["../escape", "nested/../../escape", ".", ""] {
+    for path in [".", ""] {
         assert!(w.run("Write", json!({"path":path,"content":"x"})).is_err());
     }
+    fs::create_dir(w.root.join("nested")).unwrap();
+    w.run(
+        "Write",
+        json!({"path":"nested/../parent.txt","content":"x"}),
+    )
+    .unwrap();
+    assert_eq!(w.read("parent.txt"), b"x");
 }
 
 #[test]
 #[cfg(unix)]
-fn rejects_symlink_escape_and_symlink_file_targets() {
+fn allows_symlink_directories_and_guarded_symlink_file_targets() {
     use std::os::unix::fs::symlink;
     let mut w = Workspace::new();
     let outside = Workspace::new();
     symlink(&outside.root, w.root.join("escape")).unwrap();
     assert!(w
         .run("Write", json!({"path":"escape/a","content":"x"}))
-        .is_err());
+        .is_ok());
     w.seed("a", b"old");
     symlink(w.root.join("a"), w.root.join("link")).unwrap();
+    // Existing symlink targets still require a prior read.
+    w.state.clear();
     assert!(w
         .run("Write", json!({"path":"link","content":"x"}))
         .is_err());
     assert_eq!(w.read("a"), b"old");
+    w.state.insert(w.root.join("a"), b"old".to_vec());
+    w.run("Write", json!({"path":"link","content":"new"}))
+        .unwrap();
+    assert_eq!(w.read("a"), b"new");
 }
 
 #[test]

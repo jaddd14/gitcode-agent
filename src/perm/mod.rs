@@ -198,13 +198,6 @@ impl Engine {
         if mode == Mode::Bypass {
             return Decision::Allow;
         }
-        if matches!(
-            tool,
-            "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "apply_patch"
-        ) && sensitive_path(resource)
-        {
-            return Decision::Deny;
-        }
         if self.deny.iter().any(|r| r.matches(tool, resource)) {
             return Decision::Deny;
         }
@@ -234,7 +227,7 @@ impl Engine {
         self.ask.iter().any(|rule| rule.matches(tool, resource))
     }
 
-    /// Resolve an existing resource and reject symlink escapes from workspace.
+    /// Resolve an existing resource, including paths outside the project.
     pub fn existing(&self, path: &Path) -> Result<PathBuf, String> {
         #[cfg(windows)]
         crate::platform::validate_windows_path(path)?;
@@ -246,31 +239,8 @@ impl Engine {
         let canonical = path
             .canonicalize()
             .map_err(|_| "cannot resolve tool path")?;
-        if self.workspace_for(&canonical).is_none() {
-            return Err("path is outside the workspace boundary".into());
-        }
         Ok(canonical)
     }
-}
-
-// Native tools do not silently expose common credential files, including through
-// absolute paths and resolved symlinks. Shell processes remain outside this policy.
-fn sensitive_path(resource: &str) -> bool {
-    let normalized = resource.replace('\\', "/");
-    normalized.split('/').any(|component| {
-        let name = if cfg!(windows) {
-            component.to_ascii_lowercase()
-        } else {
-            component.to_owned()
-        };
-        name == ".env"
-            || name.starts_with(".env.")
-            || name == ".ssh"
-            || name == ".aws"
-            || name == "credentials.toml"
-            || name.ends_with(".pem")
-            || name.ends_with(".key")
-    })
 }
 
 #[cfg(test)]

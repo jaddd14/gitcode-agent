@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions, Permissions},
     io::Write,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -138,12 +138,8 @@ fn resolve(engine: &Engine, tool: &str, raw: &str) -> Result<PathBuf, String> {
     let requested = Path::new(raw);
     #[cfg(windows)]
     crate::platform::validate_windows_path(requested)?;
-    if raw.is_empty()
-        || requested
-            .components()
-            .any(|c| matches!(c, Component::ParentDir))
-    {
-        return Err("empty path or parent traversal is not allowed".into());
+    if raw.is_empty() {
+        return Err("empty path is not allowed".into());
     }
     let absolute = if requested.is_absolute() {
         requested.to_owned()
@@ -154,12 +150,7 @@ fn resolve(engine: &Engine, tool: &str, raw: &str) -> Result<PathBuf, String> {
     let mut missing = Vec::new();
     loop {
         match fs::symlink_metadata(&cursor) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err("symlink mutation is not allowed".into());
-                }
-                break;
-            }
+            Ok(_) => break,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 missing.push(cursor.file_name().ok_or("invalid path")?.to_owned());
                 if !cursor.pop() {
@@ -175,16 +166,14 @@ fn resolve(engine: &Engine, tool: &str, raw: &str) -> Result<PathBuf, String> {
     for part in missing.into_iter().rev() {
         path.push(part);
     }
-    let Some(workspace) = engine.workspace_for(&path) else {
-        return Err("path is outside workspace or is workspace root".into());
-    };
-    if path == workspace {
-        return Err("path is outside workspace or is workspace root".into());
+    let relative = match engine.workspace_for(&path) {
+        Some(workspace) if path != workspace => path
+            .strip_prefix(workspace)
+            .map_err(|_| "invalid workspace path")?,
+        None => path.as_path(),
+        _ => return Err("mutation target must be a file, not a workspace directory".into()),
     }
-    let relative = path
-        .strip_prefix(workspace)
-        .map_err(|_| "invalid workspace path")?
-        .to_string_lossy();
+    .to_string_lossy();
     // Check both spellings: absolute callers must not bypass relative deny rules.
     for resource in [
         raw,

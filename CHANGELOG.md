@@ -7,8 +7,8 @@ All notable changes are documented here. This project follows [Keep a Changelog]
 ### Fixed
 
 - Shell commands run in independent sessions, wait ten seconds by default, and continue as named background tasks if still running. Completion wakes the idle interface without relying on a timing-sensitive status update. Shell state such as `cd` and `export` no longer persists between calls.
-- Parallel read and search results are displayed alongside their respective calls, and Grep's optional path restricts the actual search to that workspace file or directory.
-- Bypass mode now bypasses deny rules and the built-in sensitive-path block for native tools and shell commands, as its name promises. Workspace boundaries and editing consistency checks still apply.
+- Parallel read and search results are displayed alongside their respective calls, and Grep's optional path restricts the actual search to the specified file or directory.
+- Native file tools now allow paths outside the workspace and sensitive filenames in all permission modes, with no built-in directory or sensitive-filename denylist. The workspace remains the default base for relative paths and searches. Explicit user deny/ask/allow rules outside bypass mode, default edit approval, Plan read-only enforcement, read-before-write, stale-content checks, and OS permissions remain; internal checkpoint and memory/session import boundaries are unchanged. Bypass mode continues to bypass permission rules.
 
 ## [0.4.1] - 2026-11-16
 

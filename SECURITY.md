@@ -25,7 +25,7 @@ To help triage and reproduce the issue quickly, please include:
 - The exact `gitcode` version, commit hash, OS, and terminal environment.
 - Relevant sanitized configuration (`config.toml`, permission policy rules, active mode) with all secrets removed.
 - Minimal step-by-step reproduction instructions or a proof-of-concept transcript/fixture.
-- An assessment of the security impact (e.g., workspace boundary traversal, permission policy bypass, credential disclosure).
+- An assessment of the security impact (e.g., internal checkpoint/import boundary traversal, permission policy bypass, credential disclosure).
 
 ### Response Time Targets & Disclosure Policy
 
@@ -41,7 +41,7 @@ We follow **coordinated vulnerability disclosure**. Once a fix is verified and r
 
 ### In Scope
 
-- **Workspace confinement escapes**: bypassing canonical path checks in file tools (`Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `apply_patch`, `LS`, `Glob`, `Grep`) or `@import` memory instructions via symlinks, relative traversal (`..`), or race conditions.
+- **Internal boundary escapes**: escaping checkpoint or memory/session import boundaries, including `@import` memory boundaries via symlinks, relative traversal (`..`), or race conditions. Native file tools (`Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `apply_patch`, `LS`, `Glob`, `Grep`) intentionally allow paths outside the workspace and sensitive filenames in every permission mode, subject to the applicable permission policy and OS permissions; that access alone is not a confinement escape.
 - **Permission engine bypasses**: outside bypass mode, executing denied tools, bypassing rule evaluation precedence (`Deny` > `Ask` > `Allow`), or circumventing read-only enforcement in `Plan` mode.
 - **Command splitter bypasses**: outside bypass mode, tricking the conservative shell command parser (`src/tools/shell.rs`) into auto-approving compound or subshell constructs (`$(...)`, backticks, redirections, pipelines, control operators) under a simple prefix allow rule.
 - **Credential & secret leakage**: exposing API keys, bearer tokens, or private headers in JSONL logs, session transcripts, error messages, or terminal redraws, or creating credential/session files without strict `0600`/`0700` Unix permissions.
@@ -61,14 +61,14 @@ We follow **coordinated vulnerability disclosure**. Once a fix is verified and r
    - Outside bypass mode, tool invocations are evaluated against layered rules in strict precedence: **`Deny` overrides `Ask`, and `Ask` overrides `Allow`**.
    - Operating modes constrain default behavior:
      - `Plan`: allows `ReadOnly` operations only; all writes and shell executions are denied.
-     - `Default`: allows `ReadOnly` inside the workspace and requires approval (`Ask`) for workspace writes, shell execution, and network access.
-     - `AcceptEdits`: permits workspace file edits while still gating shell execution and external paths.
-     - `Yolo` (`--dangerously-skip-permissions`): bypasses permission rules and built-in sensitive-path blocks.
-   - Outside bypass mode, native file tools deny paths containing `.env`, `.env.*`, `*.pem`, `*.key`, `.ssh`, `.aws`, or `credentials.toml`, including resolved read paths. Other filenames can still contain secrets; approved shell commands and external processes are not confined by these rules.
+     - `Default`: allows `ReadOnly` operations and requires approval (`Ask`) for file writes, shell execution, and network access, whether file paths are inside or outside the workspace.
+     - `AcceptEdits`: permits file edits inside or outside the workspace while still gating shell execution.
+     - `Yolo` (`--dangerously-skip-permissions`): bypasses permission rules; OS permissions, read-before-write, and stale-content checks still apply.
+   - In every mode, native file tools have no built-in directory or sensitive-filename denylist: paths such as `.env`, `.env.*`, `*.pem`, `*.key`, `.ssh`, `.aws`, or `credentials.toml` are not automatically blocked. Explicit user deny/ask/allow rules still control access outside bypass mode. Read-before-write and stale-content checks remain in force for edits in every mode.
 
-2. **Workspace Path Confinement (`src/tools/mod.rs`, `src/session/memory.rs`)**
-   - Built-in file inspection, editing, and hierarchical `GITCODE.md`/`CLAUDE.md`/`AGENTS.md` `@import` expansion resolve paths against the canonical workspace root.
-   - Symlinks and parent-directory traversals (`..`) are canonicalized (including existing ancestor resolution for newly created files) so operations cannot silently escape the workspace root without explicit permission evaluation.
+2. **Path Resolution & Internal Boundaries (`src/tools/mod.rs`, `src/session/memory.rs`)**
+   - The workspace remains the default base for relative native file paths and searches, not a confinement boundary. Native file tools can use outside-workspace paths in every permission mode, subject to the applicable permission policy and OS permissions.
+   - Internal checkpoint and memory/session import boundaries are unchanged. In particular, hierarchical `GITCODE.md`/`CLAUDE.md`/`AGENTS.md` `@import` expansion retains its canonical workspace boundary; unrestricted native file paths do not relax that internal boundary.
 
 3. **Conservative Command Splitter (`src/tools/shell.rs`)**
    - Before matching a `Bash(prefix:*)` permission rule, the command string is inspected by a quote-aware parser.
@@ -80,6 +80,6 @@ We follow **coordinated vulnerability disclosure**. Once a fix is verified and r
 
 ### Honest Limitations
 
-- **Not an OS Kernel Sandbox by Default**: `gitcode` enforces path confinement and permission rules inside its own built-in tools and command parser, **not** via an operating-system kernel sandbox (`seccomp`, `landlock`, `Bubblewrap`, `seatbelt`, VMs, or containers).
+- **Not an OS Kernel Sandbox by Default**: `gitcode` enforces permission rules inside its own built-in tools and command parser, and retains internal checkpoint/import boundaries, **not** via an operating-system kernel sandbox (`seccomp`, `landlock`, `Bubblewrap`, `seatbelt`, VMs, or containers). Native file tools are not workspace-confined and do not detect or automatically block secret files; host OS permissions still apply.
 - Once a `Bash` command or external process is permitted and spawned, that child process executes with the ambient OS privileges of the user running `gitcode` and can access any files or network interfaces permitted by the host operating system.
 - When running against untrusted repositories or with relaxed permission modes (`Yolo`), run `gitcode` inside an isolated container, VM, or dedicated unprivileged OS user account.

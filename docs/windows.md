@@ -34,7 +34,9 @@ The native fallback requires the **already existing** `Microsoft.Windows.PowerSh
 
 ## Security boundaries
 
-Windows has no integrated Landlock or seatbelt equivalent here. Workspace file tools enforce path boundaries and shell requests pass through permission checks and command classification. This is **tool-level enforcement, not OS-level sandboxing**. An approved shell command can access resources available to the current user. Do not run untrusted commands on the assumption that the operating system isolates them.
+Windows has no integrated Landlock or seatbelt equivalent here. Native file tools allow paths outside the workspace and sensitive filenames in all permission modes; there is no built-in directory or sensitive-filename denylist. The workspace remains the default base for relative paths and searches. Explicit user deny/ask/allow rules still apply outside bypass mode, default-mode edits require approval, and Plan mode remains read-only. Read-before-write, stale-content checks, and Windows filesystem permissions still apply. Internal checkpoint and memory/session import boundaries are unchanged.
+
+Shell requests pass through permission checks and command classification. This is **tool-level enforcement, not OS-level sandboxing**. An approved shell command can access resources available to the current user. Do not run untrusted commands on the assumption that the operating system isolates them.
 
 Child shells use kill-on-close Job Objects for process-tree ownership. Native cancellation, background jobs and each interpreter must pass Windows CI before release.
 

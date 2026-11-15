@@ -99,9 +99,9 @@ Use `gitcode --continue` or `/resume` to return to a session. `/import` can copy
 
 ## <img src="assets/icons/shield.svg" alt="" width="20" height="20"> Security and privacy
 
-Outside bypass mode, built-in file tools reject common sensitive paths such as `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.toml`, `.ssh` and `.aws`, including resolved symlink targets. This is a limited safeguard, not secret detection: other filenames can contain credentials, and approved shell commands or external processes run with your operating-system privileges. The agent is not an OS sandbox.
+Native file tools allow paths outside the workspace and sensitive filenames in every permission mode: there is no built-in directory or sensitive-filename denylist. The workspace remains the default base for relative paths and searches, not a file-access boundary. Explicit user deny/ask/allow rules still apply outside bypass mode; OS permissions always apply. The agent is not an OS sandbox.
 
-Shell execution, workspace edits, web requests and MCP calls require permission in the default mode; headless operations requiring approval fail closed. `--dangerously-skip-permissions` skips prompts and should only be used in an environment you control. Prompt injection remains a risk. Conversations and tool results are sent to the selected provider when needed and are persisted locally; review the provider's data policies and avoid placing secrets in prompts.
+Shell execution, file edits (inside or outside the workspace), web requests and MCP calls require permission in the default mode; headless operations requiring approval fail closed. Plan mode remains read-only, and edits still require read-before-write and stale-content checks. Internal checkpoint and memory/session import boundaries are unchanged. `--dangerously-skip-permissions` skips prompts and should only be used in an environment you control. Prompt injection remains a risk. Conversations and tool results are sent to the selected provider when needed and are persisted locally; review the provider's data policies and avoid placing secrets in prompts.
 
 Diagnostic logs redact registered credentials and some common token forms as a best effort, not a guarantee for arbitrary secrets. See [SECURITY.md](SECURITY.md) for the security model and private vulnerability reporting.
 
