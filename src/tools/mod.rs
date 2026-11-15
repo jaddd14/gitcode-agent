@@ -727,14 +727,10 @@ fn bound(mut output: String) -> String {
 
 fn search(root: &Path, name: &str, input: &Value, permissions: &Engine) -> Result<String, String> {
     let pattern = required(input, "pattern")?;
-    let search_root = if name == "Grep" {
-        input["path"]
-            .as_str()
-            .map(|path| permissions.existing(Path::new(path)))
-            .transpose()?
-    } else {
-        None
-    };
+    let search_root = input["path"]
+        .as_str()
+        .map(|path| permissions.existing(Path::new(path)))
+        .transpose()?;
     let glob = if name == "Glob" {
         Some(pattern)
     } else {
