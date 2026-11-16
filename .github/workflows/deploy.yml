@@ -254,7 +254,7 @@ jobs:
           assets = sorted(path for path in dist.iterdir() if path.is_file())
           (dist / 'SHA256SUMS').write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n' for path in assets))
           text = pathlib.Path('CHANGELOG.md').read_text()
-          match = re.search(r'^## \[' + re.escape(version) + r'\].*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
+          match = re.search(r'^## \[' + re.escape(version) + r'\][^\n]*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
           assert match, 'Missing changelog section'
           pathlib.Path('release-notes.md').write_text(match.group(1).strip() + '\n')
           PY

@@ -2,13 +2,20 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] - 2026-11-16
+
+### Fixed
+
+- Native file tools allow paths outside the workspace and sensitive filenames in every permission mode. The built-in directory and sensitive-filename denylist is gone, so reading or editing a path outside the project no longer needs a mode switch. Explicit user deny/ask/allow rules outside bypass mode, default edit approval, Plan read-only enforcement, read-before-write, stale-content checks and OS permissions are unchanged.
+- `Glob` honours search paths outside the workspace instead of confining matches to the project directory, matching the wider path access the other file tools now have.
+
 ## [0.4.2] - 2026-11-15
 
 ### Fixed
 
 - Shell commands run in independent sessions, wait ten seconds by default, and continue as named background tasks if still running. Completion wakes the idle interface without relying on a timing-sensitive status update. Shell state such as `cd` and `export` no longer persists between calls.
-- Parallel read and search results are displayed alongside their respective calls, and Grep's optional path restricts the actual search to the specified file or directory.
-- Native file tools now allow paths outside the workspace and sensitive filenames in all permission modes, with no built-in directory or sensitive-filename denylist. The workspace remains the default base for relative paths and searches. Explicit user deny/ask/allow rules outside bypass mode, default edit approval, Plan read-only enforcement, read-before-write, stale-content checks, and OS permissions remain; internal checkpoint and memory/session import boundaries are unchanged. Bypass mode continues to bypass permission rules.
+- Parallel read and search results are displayed alongside their respective calls, and Grep's optional path restricts the actual search to that workspace file or directory.
+- Bypass mode now bypasses deny rules and the built-in sensitive-path block for native tools and shell commands, as its name promises. Workspace boundaries and editing consistency checks still apply.
 
 ## [0.4.1] - 2026-11-16
 
