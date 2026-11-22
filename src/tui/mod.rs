@@ -15,6 +15,7 @@ pub mod intro;
 pub mod markdown;
 pub mod model_picker;
 mod picker;
+pub mod provider_picker;
 mod question_picker;
 pub mod render;
 pub mod session_picker;

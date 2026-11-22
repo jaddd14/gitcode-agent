@@ -54,6 +54,8 @@ pub(crate) fn update_context(
 pub struct Status {
     /// Current model display name.
     pub model: String,
+    /// Active provider profile name, shown by `/provider`.
+    pub provider: String,
     /// Explicit reasoning effort, or none for the provider default.
     pub effort: Option<String>,
     /// Current permission mode display name.

@@ -19,6 +19,8 @@ pub struct Compaction {
     pub window: u64,
     /// Fraction of the window at which summarization begins.
     pub threshold: f64,
+    /// Whether crossing the threshold summarizes without an explicit request.
+    pub automatic: bool,
     cached: Option<CachedSummary>,
     manual_usage: Vec<(Usage, u64)>,
 }
@@ -49,9 +51,15 @@ impl Compaction {
         Self {
             window,
             threshold,
+            automatic: true,
             cached: None,
             manual_usage: Vec::new(),
         }
+    }
+
+    /// Turn threshold-triggered compaction off or on; `/compact` still works.
+    pub fn set_automatic(&mut self, automatic: bool) {
+        self.automatic = automatic;
     }
 
     fn digest(messages: &[Message]) -> Result<[u8; 32], String> {
@@ -246,8 +254,15 @@ impl Compaction {
                     .div_ceil(3),
             )
             .saturating_add(u64::from(request.max_tokens));
-        if !force && estimated < (self.window as f64 * self.threshold) as u64 {
-            return Ok((projected, Vec::new()));
+        if !force {
+            // An operator who turned automatic compaction off keeps the whole
+            // conversation until they ask for `/compact` explicitly.
+            if !self.automatic {
+                return Ok((projected, Vec::new()));
+            }
+            if estimated < (self.window as f64 * self.threshold) as u64 {
+                return Ok((projected, Vec::new()));
+            }
         }
         // Retain a token-sized recent tail, not merely a fixed number of messages.
         // Keep at least the latest two records and never split a tool/result pair.

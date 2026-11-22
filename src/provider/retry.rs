@@ -89,7 +89,9 @@ impl Policy {
             return None;
         }
         if let Some(delay) = retry_after {
-            return Some(delay.min(Duration::from_secs(300)));
+            // A server-blessed immediate retry still needs a beat: retrying in the
+            // same millisecond looked like "0с" in the UI and hammered the API.
+            return Some(delay.min(Duration::from_secs(300)).max(MIN_DELAY));
         }
         let factor = 1_u32.checked_shl(attempt.min(30)).unwrap_or(u32::MAX);
         Some(
@@ -100,6 +102,9 @@ impl Policy {
         )
     }
 }
+
+/// Smallest gap between two attempts, so the countdown never reads zero.
+pub const MIN_DELAY: Duration = Duration::from_millis(100);
 
 #[cfg(test)]
 mod tests {

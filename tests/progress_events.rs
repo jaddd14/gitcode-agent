@@ -101,7 +101,7 @@ async fn retry_notice_is_live_before_backoff_and_contains_only_schedule() {
         .unwrap();
     assert_eq!(
         serde_json::to_value(&notice).unwrap(),
-        json!({"type":"retry_notice","attempt":2,"max_attempts":4,"delay_ms":1000})
+        json!({"type":"retry_notice","attempt":1,"max_attempts":3,"delay_ms":1000})
     );
     assert!(!run.is_finished());
     let events = run.await.unwrap().unwrap();

@@ -32,9 +32,9 @@ GitCode is under active development. Review proposed actions and changes, and us
 ## <img src="assets/icons/terminal.svg" alt="" width="20" height="20"> What GitCode does
 
 - Reads and searches files, edits text and notebooks, applies patches, and runs shell commands with permission controls.
-- Supports Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, and compatible endpoints. Provider credentials stay in your environment or local credential store.
-- Saves sessions locally, resumes conversations, and imports supported Claude Code and Codex journals. `/context` shows the estimated context and `/compact` creates a new summary on demand.
-- Summarizes older history as the configured context limit approaches while keeping recent messages and tool-call pairs together. The original session remains available locally. Summaries are model-generated and can omit details; they incur provider usage.
+- Supports Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, and compatible endpoints. Use `/provider` interactively to pick a saved endpoint or add a new one with API-key or Bearer auth; provider credentials stay in your environment or local credential store.
+- Saves sessions locally with prompt-derived titles for `/resume`, resumes active sessions cleanly on reconnect, and imports supported Claude Code and Codex journals. `/context` shows the estimated context and `/compact` creates a new summary on demand.
+- Summarizes older history as the configured context limit approaches (or keeps full context when `auto_compact = false`) while keeping recent messages and tool-call pairs together. The original session remains available locally. Summaries are model-generated and can omit details; they incur provider usage.
 - Offers terminal and noninteractive modes, usage accounting, configurable agents, skills, trusted pre/post tool hooks and local hook plugins, web fetch, and configured MCP tool calls with reusable stdio sessions. Integration coverage varies; see the guides below for limitations.
 
 ## <img src="assets/icons/rocket.svg" alt="" width="20" height="20"> Install

@@ -2,6 +2,22 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.4] - 2026-11-17
+
+### Added
+
+- Interactive `/provider` picker and setup flow matching `/effort`: choose from saved provider profiles or select adding a new one at the top, enter a base URL, choose API key or Bearer token authentication, and enter the token with masked input (saved securely under `~/.gitcode/credentials/`).
+- `auto_compact` configuration option (default `true`) to disable automatic context compaction when desired.
+- `mouse_scroll_speed` configuration option (default `3`) along with Codex-style keyboard history paging (`PageUp`/`PageDown`, `Shift+Up`/`Shift+Down`, `Shift+End`) and immediate scroll steps without per-frame lag.
+- Automatic session title assignment from the opening prompt so `/resume` lists meaningful chat titles.
+
+### Fixed
+
+- Slash commands typed while a model turn is streaming are executed immediately upon submission instead of staying queued until manual cancellation.
+- Permission approval picker (`approval_picker`) reliably accepts `Enter` on allow and similar-command scopes and ignores unintended input cleanly.
+- Styled retry notices (`▲ Переподключаюсь · попытка 1/3 · через Nс`) with 1-based attempt numbering and non-zero countdowns (`>= 1с`).
+- Live turn visibility and terminal geometry synchronization after tmux/SSH disconnect and reconnect, plus bounded session persistence avoiding `[exited]` crashes on large chats.
+
 ## [0.4.3] - 2026-11-16
 
 ### Fixed

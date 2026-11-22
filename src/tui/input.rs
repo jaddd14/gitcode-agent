@@ -31,6 +31,12 @@ pub enum Action {
     Complete,
     /// Let an external history controller open fuzzy history search.
     SearchHistory,
+    /// Scroll the conversation by one line, positive values move toward the tail.
+    ScrollLines(isize),
+    /// Scroll the conversation by a page, positive values move toward the tail.
+    ScrollPage(isize),
+    /// Jump back to the live tail and resume following new output.
+    ScrollBottom,
     /// Explicitly request an image from the native clipboard (no IO in the editor).
     PasteImage,
 }
@@ -335,6 +341,13 @@ impl Editor {
             Char('o') if ctrl => return Action::Transcript,
             Char('t') if ctrl => return Action::Todos,
             Char('r') if ctrl => return Action::SearchHistory,
+            // Pager bindings mirror Codex: PageUp/PageDown scroll a screen,
+            // Shift+arrows a single line, Shift+End returns to the live tail.
+            PageUp => return Action::ScrollPage(-1),
+            PageDown => return Action::ScrollPage(1),
+            Up if shift => return Action::ScrollLines(-1),
+            Down if shift => return Action::ScrollLines(1),
+            End if shift => return Action::ScrollBottom,
             BackTab => return Action::CyclePermission,
             Tab => return Action::Complete,
             Char('j') if ctrl => self.insert("\n", false),

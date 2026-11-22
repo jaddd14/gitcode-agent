@@ -332,6 +332,37 @@ impl<W: Write> Renderer<W> {
             viewport.mouse(event);
         }
     }
+    /// Scroll the conversation by lines, matching Codex's pager keymap.
+    pub fn scroll_lines(&mut self, rows: isize) {
+        if let Some(viewport) = &mut self.viewport {
+            viewport.scroll_lines(rows);
+        }
+    }
+    /// Scroll the conversation by whole visible pages.
+    pub fn scroll_page(&mut self, pages: isize) {
+        if let Some(viewport) = &mut self.viewport {
+            let rows = viewport.page_rows().saturating_sub(1).max(1) as isize;
+            viewport.scroll_lines(rows.saturating_mul(pages));
+        }
+    }
+    /// Return to the live tail after reading history.
+    pub fn scroll_to_bottom(&mut self) {
+        if let Some(viewport) = &mut self.viewport {
+            viewport.scroll_to_bottom();
+        }
+    }
+    /// Whether the operator scrolled away from the live tail.
+    pub fn scrolled_back(&self) -> bool {
+        self.viewport
+            .as_ref()
+            .is_some_and(super::viewport::Viewport::scrolled_back)
+    }
+    /// Rows moved per mouse-wheel notch.
+    pub fn set_scroll_step(&mut self, step: usize) {
+        if let Some(viewport) = &mut self.viewport {
+            viewport.set_scroll_step(step);
+        }
+    }
     /// Clear stale mouse highlighting when keyboard input resumes.
     pub fn clear_selection(&mut self) {
         if let Some(viewport) = &mut self.viewport {

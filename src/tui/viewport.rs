@@ -15,6 +15,8 @@ pub(super) struct Viewport {
     prefix: usize,
     offset: usize,
     target_offset: usize,
+    // Rows moved per mouse-wheel notch, mirroring Codex's `tui.mouse_scroll_speed`.
+    scroll_step: usize,
     previous_count: usize,
     screen: Vec<String>,
     drawn: Vec<String>,
@@ -46,6 +48,40 @@ struct Selection {
     end: (usize, usize),
 }
 impl Viewport {
+    /// Rows moved per mouse-wheel notch; clamped so a notch always moves the view.
+    pub fn set_scroll_step(&mut self, step: usize) {
+        self.scroll_step = step.clamp(1, 50);
+    }
+    fn step(&self) -> usize {
+        if self.scroll_step == 0 {
+            3
+        } else {
+            self.scroll_step
+        }
+    }
+    /// Rows in the conversation viewport of the last painted frame.
+    pub fn page_rows(&self) -> usize {
+        self.view_chat_height.max(1)
+    }
+    /// Move the conversation by `rows` lines immediately, exactly like Codex:
+    /// no per-frame animation, so a wheel notch lands where the operator expects.
+    pub fn scroll_lines(&mut self, rows: isize) {
+        self.target_offset = if rows < 0 {
+            self.target_offset.saturating_sub(rows.unsigned_abs())
+        } else {
+            self.target_offset.saturating_add(rows as usize)
+        };
+        self.offset = self.target_offset;
+    }
+    /// Return to the live tail, resuming follow-along with new output.
+    pub fn scroll_to_bottom(&mut self) {
+        self.target_offset = 0;
+        self.offset = 0;
+    }
+    /// Whether the operator is reading history instead of the live tail.
+    pub fn scrolled_back(&self) -> bool {
+        self.offset > 0
+    }
     pub fn append(&mut self, rows: &[String]) {
         // One empty row separates turns; models emit runs of newlines around
         // tool calls, and repeating them stretches the transcript.
@@ -136,7 +172,11 @@ impl Viewport {
         let screen = (event.row as usize, event.column as usize);
         match event.kind {
             MouseEventKind::ScrollUp => {
-                self.target_offset = self.target_offset.saturating_add(6);
+                let step = self.step();
+                self.target_offset = self.target_offset.saturating_add(step);
+                // Codex paints the wheel immediately; a per-frame animation made
+                // the view trail the pointer and feel like it was fighting back.
+                self.offset = self.target_offset;
                 if self
                     .selection
                     .as_ref()
@@ -146,7 +186,9 @@ impl Viewport {
                 }
             }
             MouseEventKind::ScrollDown => {
-                self.target_offset = self.target_offset.saturating_sub(6);
+                let step = self.step();
+                self.target_offset = self.target_offset.saturating_sub(step);
+                self.offset = self.target_offset;
                 if self
                     .selection
                     .as_ref()
@@ -269,11 +311,9 @@ impl Viewport {
         let max_offset = count.saturating_sub(chat_height);
         self.target_offset = self.target_offset.min(max_offset);
         self.offset = self.offset.min(max_offset);
-        if self.offset < self.target_offset {
-            self.offset += 1;
-        } else if self.offset > self.target_offset {
-            self.offset -= 1;
-        }
+        // The view follows the requested offset exactly; Codex has no per-frame
+        // catch-up animation, so scrolling never drifts behind the input.
+        self.offset = self.target_offset;
         if let Some(s) = &self.selection {
             if s.dragging && !s.composer {
                 // A held drag that reaches an edge scrolls, so the copy keeps
@@ -514,9 +554,11 @@ mod tests {
         v.draw(&mut Vec::new(), (30, 5)).unwrap();
         assert_eq!(v.screen, ["line 6", "line 7", "line 8", "line 9", "prompt"]);
         v.mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
-        while v.scroll_pending() {
-            v.draw(&mut Vec::new(), (30, 5)).unwrap();
-        }
+        assert!(!v.scroll_pending());
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        assert_eq!(v.screen, ["line 3", "line 4", "line 5", "line 6", "prompt"]);
+        v.mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
         assert_eq!(v.screen, ["line 0", "line 1", "line 2", "line 3", "prompt"]);
         v.append(&["line 10".into()]);
         v.draw(&mut Vec::new(), (30, 5)).unwrap();
@@ -586,6 +628,8 @@ mod tests {
         let before = v.selection.as_ref().unwrap().text.clone();
         assert_eq!(before, "line 16\nline 17\nl");
 
+        v.mouse(mouse(MouseEventKind::ScrollUp, 2, 0));
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
         v.mouse(mouse(MouseEventKind::ScrollUp, 2, 0));
         v.draw(&mut Vec::new(), (30, 5)).unwrap();
         let after = v.selection.as_ref().unwrap().text.clone();

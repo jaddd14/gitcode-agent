@@ -170,6 +170,34 @@ pub fn style_info_panel_row(row: &str, theme: &Theme, mode: ColorMode) -> String
 pub(crate) fn style_live_row(row: &str, theme: &Theme, mode: ColorMode, elapsed_ms: u64) -> String {
     let row = unstyled(row);
     let activity = row.trim_start_matches(' ');
+    if (activity.starts_with("▲ ") || activity.starts_with("! "))
+        && activity.contains("Переподключаюсь")
+    {
+        let marker_start = row.len() - activity.len();
+        let marker_end = marker_start + activity.chars().next().map(char::len_utf8).unwrap_or(0);
+        let split = row
+            .find(" · ")
+            .or_else(|| row.find(": "))
+            .unwrap_or(row.len());
+        let level = [100u16, 90, 80, 70, 80, 90][((elapsed_ms / 150) % 6) as usize];
+        let crate::theme::Rgb(r, g, b) = theme.warn;
+        let pulse = crate::theme::Rgb(
+            (u16::from(r) * level / 100) as u8,
+            (u16::from(g) * level / 100) as u8,
+            (u16::from(b) * level / 100) as u8,
+        );
+        return format!(
+            "{}{}{}{}{}{}{}{}",
+            &row[..marker_start],
+            foreground(pulse, mode),
+            &row[marker_start..marker_end],
+            foreground(theme.warn, mode),
+            &row[marker_end..split],
+            foreground(theme.panel_text, mode),
+            &row[split..],
+            reset(mode)
+        );
+    }
     if (activity.starts_with("✻ ") || activity.starts_with("* "))
         && (activity.contains("Думаю…") || activity.contains("Сжимаю контекст…"))
     {
@@ -227,6 +255,33 @@ pub fn style_frame_row_with_panel(
         return row;
     }
     let activity = row.trim_start_matches(' ');
+    if (activity.starts_with("▲ ") || activity.starts_with("! "))
+        && activity.contains("Переподключаюсь")
+    {
+        let split = row
+            .find(" · ")
+            .or_else(|| row.find(": "))
+            .unwrap_or(row.len());
+        return format!(
+            "{}{}{}{}{}",
+            foreground(theme.warn, mode),
+            &row[..split],
+            foreground(theme.panel_text, mode),
+            &row[split..],
+            reset(mode)
+        );
+    }
+    if activity.starts_with("▲ ") {
+        let split = row.find(" (").unwrap_or(row.len());
+        return format!(
+            "{}{}{}{}{}",
+            foreground(theme.warn, mode),
+            &row[..split],
+            foreground(theme.placeholder, mode),
+            &row[split..],
+            reset(mode)
+        );
+    }
     if (activity.starts_with("✻ ") || activity.starts_with("* "))
         && (activity.contains("Думаю…") || activity.contains("Сжимаю контекст…"))
     {
@@ -797,6 +852,24 @@ mod tests {
                 assert!(styled.contains(&format!("{gray}{ch}")), "{label}: {ch}");
             }
         }
+    }
+
+    #[test]
+    fn retry_notice_uses_warm_amber_accent_and_panel_text() {
+        let theme = Theme::default();
+        let mode = ColorMode::TrueColor;
+        let styled = style_live_row(
+            "▲ Переподключаюсь · попытка 1/3 · через 2с",
+            &theme,
+            mode,
+            0,
+        );
+        assert!(styled.starts_with(&foreground(theme.warn, mode)));
+        assert!(styled.contains(&foreground(theme.panel_text, mode)));
+        assert_eq!(
+            unstyled(&styled),
+            "▲ Переподключаюсь · попытка 1/3 · через 2с"
+        );
     }
 
     #[test]

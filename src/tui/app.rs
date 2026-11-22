@@ -44,6 +44,38 @@ fn apply_model_effort(agent: &mut Agent, status: &mut Status) {
     status.effort = agent.client.effort().map(str::to_owned);
 }
 
+/// Store a freshly entered token in the private credential directory.
+///
+/// The profile keeps only `api_key_env`; the secret never reaches `config.toml`.
+fn store_token(home: &std::path::Path, key_env: &str, token: &str) -> Result<(), String> {
+    let path = home.join(".gitcode").join("credentials").join(key_env);
+    crate::credentials::create(&path, &crate::credentials::Secret::new(token.to_owned()))
+        .map_err(|_| "не удалось сохранить токен".to_owned())
+}
+
+/// Swap the live client for a saved profile, keeping the reasoning effort.
+fn activate_provider(
+    agent: &mut Agent,
+    profile: &crate::config::Provider,
+    secret: Option<crate::credentials::Secret>,
+    status: &mut Status,
+) -> Result<(), String> {
+    let bearer = profile.protocol != crate::config::Protocol::Anthropic;
+    let mut client = crate::provider::transport::Client::with_protocol(
+        &profile.base_url,
+        secret,
+        bearer,
+        Duration::from_secs(profile.timeout_seconds),
+        profile.protocol,
+    )?;
+    client.set_prompt_cache(profile.prompt_cache);
+    let effort = agent.client.effort().map(str::to_owned);
+    let _ = client.set_effort(effort.as_deref());
+    agent.client = client;
+    status.provider = profile.name.clone();
+    Ok(())
+}
+
 fn save_effort(agent: &Agent, status: &mut Status) {
     let result = crate::platform::home_dir()
         .ok_or_else(|| io::Error::other("домашний каталог недоступен"))
@@ -65,6 +97,40 @@ fn frame_clock() -> tokio::time::Interval {
     let mut clock = tokio::time::interval(Duration::from_nanos(1_000_000_000 / 60));
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     clock
+}
+
+/// Whether a submitted prompt names a slash command rather than chat text.
+///
+/// Custom commands live on disk, so their names are checked separately; builtins
+/// are resolved in memory and never touch the filesystem on a keystroke.
+fn is_slash_command(prompt: &str, custom: &[crate::extensibility::CustomCommand]) -> bool {
+    let Some(rest) = prompt.trim().strip_prefix('/') else {
+        return false;
+    };
+    let name = rest
+        .split_once(char::is_whitespace)
+        .map_or(rest, |(name, _)| name);
+    !name.is_empty()
+        && (name == "new"
+            || crate::extensibility::BUILTIN_COMMANDS
+                .iter()
+                .any(|command| command.name == name)
+            || custom.iter().any(|command| command.name == name))
+}
+
+/// Derive a short session title from the first prompt, the way Codex names chats.
+///
+/// `/resume` is only usable when entries say what they are about, so the title
+/// is written once, when the conversation still has no user messages.
+fn session_title(prompt: &str) -> String {
+    let single_line = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed: String = single_line.chars().take(60).collect();
+    let trimmed = trimmed.trim_end_matches(['.', ',', ';', ':', '!', '?', ' ']);
+    if trimmed.is_empty() {
+        "Новый чат".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 #[derive(Default)]
@@ -216,6 +282,8 @@ pub struct Options<'a> {
     pub permission: &'a str,
     /// Disable the skippable startup animation.
     pub no_intro: bool,
+    /// Conversation rows moved per mouse-wheel notch.
+    pub mouse_scroll_speed: u32,
     /// Persistent project session and recovered conversation.
     pub session: Option<(
         crate::session::store::SessionStore,
@@ -435,6 +503,11 @@ fn action(event: Event, editor: &mut Editor, renderer: &mut Renderer<io::Stdout>
     }
     if let Event::Resize(w, h) = event {
         renderer.resize(w.into(), h.into());
+    }
+    if let Event::FocusGained = event {
+        let (w, h) = renderer.size();
+        renderer.resize(w, h);
+        return Action::Refresh;
     }
     if matches!(event, Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Press) {
         renderer.clear_selection();
@@ -1177,12 +1250,14 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     };
     let mut status = Status {
         model: options.model.into(),
+        provider: options.provider.into(),
         effort: agent.client.effort().map(str::to_owned),
         permission: options.permission.into(),
         branch: options.branch.into(),
         ..Status::default()
     };
     renderer.enable_viewport()?;
+    renderer.set_scroll_step(options.mouse_scroll_speed as usize);
     draw_header(&mut renderer, &header, &status, mode)?;
     let mut persistence = options.session;
     let mut messages = persistence
@@ -1201,6 +1276,9 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     let completion_notify = agent.tools.completion_notify();
     let mut exit_armed = false;
     let mut copy_deadline = None;
+    // Slash commands typed while a turn is streaming are commands, not chat:
+    // they run as soon as the turn ends instead of being sent to the model.
+    let mut deferred_commands: Vec<String> = Vec::new();
     loop {
         status.background_jobs = background_count(&background_handles);
         status.queued = queue.len();
@@ -1215,7 +1293,14 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             mode,
         )?;
         let mut submitted_image = None;
-        let pending = if !status.bypass_confirmation && !queue.is_empty() {
+        let pending = if !deferred_commands.is_empty() {
+            // Slash commands typed during the previous turn run first, in order.
+            let command = deferred_commands.remove(0);
+            if deferred_commands.is_empty() {
+                status.toast = None;
+            }
+            Action::Submit(command)
+        } else if !status.bypass_confirmation && !queue.is_empty() {
             let Some((prompt, image)) = queue.pop_front_with_image() else {
                 continue;
             };
@@ -1292,6 +1377,15 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
             status.queued = queue.len();
         }
         match pending {
+            Action::ScrollLines(rows) => {
+                renderer.scroll_lines(rows);
+            }
+            Action::ScrollPage(pages) => {
+                renderer.scroll_page(pages);
+            }
+            Action::ScrollBottom => {
+                renderer.scroll_to_bottom();
+            }
             Action::PasteImage => {
                 stage_clipboard_image(&mut editor, &mut status).await;
                 exit_armed = false;
@@ -1413,6 +1507,97 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                 renderer.set_theme(Theme::default());
                                 status.toast = Some(format!("Тема не сохранена: {error}"))
                             }
+                        }
+                    }
+                    continue;
+                }
+                if prompt.trim() == "/provider" {
+                    let home = crate::platform::home_dir()
+                        .ok_or_else(|| io::Error::other("home directory is required"))?;
+                    let saved = crate::config::load(
+                        &home,
+                        &agent.tools.permissions.root,
+                        &std::collections::BTreeMap::new(),
+                        &crate::config::Overrides::new(),
+                    )
+                    .map(|config| config.providers)
+                    .unwrap_or_default();
+                    // Show the profile the process is actually using, even when
+                    // it came from a CLI flag and was never saved.
+                    let mut profiles = saved;
+                    if !profiles
+                        .iter()
+                        .any(|profile| profile.name == status.provider)
+                        && !status.provider.is_empty()
+                    {
+                        profiles.insert(
+                            0,
+                            crate::config::Provider {
+                                name: status.provider.clone(),
+                                ..crate::config::Provider::default()
+                            },
+                        );
+                    }
+                    let choice = super::provider_picker::select(
+                        &mut renderer,
+                        &mut events,
+                        &profiles,
+                        &status.provider,
+                    )
+                    .await?;
+                    let Some(choice) = choice else { continue };
+                    let (profile, fresh_token) = match choice {
+                        super::provider_picker::Choice::Existing(profile) => (profile, None),
+                        super::provider_picker::Choice::Created(created) => {
+                            if let Err(error) =
+                                store_token(&home, &created.profile.api_key_env, &created.token)
+                            {
+                                status.toast = Some(error);
+                                continue;
+                            }
+                            (created.profile, Some(created.token))
+                        }
+                    };
+                    let secret = match fresh_token {
+                        Some(token) => Some(crate::credentials::Secret::new(token)),
+                        None => {
+                            let key_env = profile.api_key_env.clone();
+                            if key_env.is_empty() {
+                                None
+                            } else {
+                                let env: std::collections::BTreeMap<String, String> =
+                                    std::env::vars().collect();
+                                let home = home.clone();
+                                match tokio::task::spawn_blocking(move || {
+                                    crate::credentials::resolve(&home, &key_env, &env)
+                                })
+                                .await
+                                {
+                                    Ok(Ok(secret)) => secret,
+                                    _ => {
+                                        status.toast = Some("Ключ провайдера не прочитан".into());
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    match activate_provider(agent, &profile, secret, &mut status) {
+                        Ok(()) => {
+                            let saved = tokio::task::spawn_blocking({
+                                let home = home.clone();
+                                let profile = profile.clone();
+                                move || crate::config::save_provider(&home, profile)
+                            })
+                            .await
+                            .map_err(io::Error::other)?;
+                            status.toast = Some(match saved {
+                                Ok(()) => format!("Провайдер: {}", profile.name),
+                                Err(error) => format!("Провайдер активен, не сохранён: {error}"),
+                            });
+                        }
+                        Err(error) => {
+                            status.toast = Some(format!("Провайдер не применён: {error}"))
                         }
                     }
                     continue;
@@ -1871,6 +2056,11 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                     mode,
                 ))?;
                 let mut request = messages.clone();
+                // Capture the title before the prompt text is moved into the message.
+                let first_prompt = messages
+                    .iter()
+                    .all(|message| message.role != Role::User)
+                    .then(|| session_title(&prompt));
                 let mut user_message = Message::text(Role::User, prompt);
                 if let Some(image) = submitted_image {
                     user_message.content.push(image);
@@ -1880,14 +2070,28 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                 // show the request even if the process dies mid-turn.
                 let mut persisted = messages.len();
                 if let Some((store, session)) = &persistence {
-                    let store = store.clone();
+                    let writer = store.clone();
                     let id = session.id.clone();
                     let pending = request[persisted..].to_vec();
                     if matches!(
-                        tokio::task::spawn_blocking(move || store.append_many(&id, &pending)).await,
+                        tokio::task::spawn_blocking(move || writer.append_many(&id, &pending))
+                            .await,
                         Ok(Ok(()))
                     ) {
                         persisted = request.len();
+                    }
+                    // Name the chat as soon as it has a topic, so /resume lists
+                    // readable entries instead of "gitcode session".
+                    if let Some(title) = first_prompt {
+                        let store = store.clone();
+                        let id = session.id.clone();
+                        // An unknown branch is stored as absent, not as an empty label.
+                        let branch =
+                            (!status.branch.trim().is_empty()).then(|| status.branch.clone());
+                        let _ = tokio::task::spawn_blocking(move || {
+                            store.update_metadata(&id, title, branch)
+                        })
+                        .await;
                     }
                 }
                 super::statusbar::update_context(&mut status, agent, &request);
@@ -1949,12 +2153,26 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                         let project = session.project.clone();
                                         let provider = options.provider.to_owned();
                                         let model = ledger_model.clone();
-                                        tokio::task::spawn_blocking(move || {
+                                        let saved = tokio::task::spawn_blocking(move || {
                                             crate::usage::record_turn(&home, &id, &project, &provider, &model, &requests)?;
                                             store.append_many(&id, &appended)?;
                                             Ok::<_, io::Error>(())
-                                        }).await.map_err(io::Error::other)??;
-                                        persisted = outcome.messages.len();
+                                        }).await;
+                                        // Journal failures must never end the chat: the
+                                        // conversation is still live in memory.
+                                        match saved {
+                                            Ok(Ok(())) => persisted = outcome.messages.len(),
+                                            Ok(Err(error)) => {
+                                                status.toast = Some(format!(
+                                                    "Сессия не сохранена: {error}"
+                                                ));
+                                            }
+                                            Err(error) => {
+                                                status.toast = Some(format!(
+                                                    "Сессия не сохранена: {error}"
+                                                ));
+                                            }
+                                        }
                                     }
                                     messages = outcome.messages;
                                     let final_text = if response_chunk.is_empty()
@@ -2031,6 +2249,8 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     live_usage.apply(&mut status, &base, started.elapsed());
                                 }
                                 Some(Progress::ThinkingDelta { text }) => {
+                                    retry_deadline = None;
+                                    status.retry_notice = None;
                                     live_context.add_bytes(text.len(), &mut status);
                                     live_usage.add_text(&text);
                                     live_usage.apply(&mut status, &base, started.elapsed());
@@ -2247,9 +2467,20 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                                     break;
                                 }
                                 Action::Submit(prompt) => {
-                                    status.queued_prompts.push(prompt.clone());
-                                    queue.push_with_image(prompt, editor.take_image());
-                                    status.queued = queue.len();
+                                    if is_slash_command(&prompt, &[]) {
+                                        // A command typed mid-turn must never reach the
+                                        // model as steering text; it waits for the turn
+                                        // to finish and runs on its own.
+                                        deferred_commands.push(prompt);
+                                        status.toast = Some(format!(
+                                            "Команда выполнится после ответа ({})",
+                                            deferred_commands.len()
+                                        ));
+                                    } else {
+                                        status.queued_prompts.push(prompt.clone());
+                                        queue.push_with_image(prompt, editor.take_image());
+                                        status.queued = queue.len();
+                                    }
                                 }
                                 Action::PasteImage => {
                                     stage_clipboard_image(&mut editor, &mut status).await;
@@ -2287,11 +2518,27 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         _ = frames.tick(), if dirty || status.busy => {
                             update_copy_notice(&mut renderer, &mut status, &mut copy_deadline)?;
                             status.background_jobs = background_count(&background_handles);
+                            // tmux does not always deliver a resize when a client
+                            // reattaches, so a resumed session would keep painting
+                            // into stale geometry and the live turn stayed invisible.
+                            if let Ok((width, height)) = crossterm::terminal::size() {
+                                let (width, height) = (usize::from(width.max(1)), usize::from(height.max(1)));
+                                if (width, height) != renderer.size() {
+                                    renderer.resize(width, height);
+                                }
+                            }
                             status.elapsed_secs = started.elapsed().as_secs();
                             status.elapsed_millis = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                             if let Some((deadline, attempt, max_attempts)) = retry_deadline {
-                                let seconds = deadline.saturating_duration_since(Instant::now()).as_millis().div_ceil(1000);
-                                status.retry_notice = Some(format!("Повтор через {seconds}с (попытка {attempt} из {max_attempts})"));
+                                // Round up so the countdown never reads "0с" while waiting.
+                                let seconds = deadline
+                                    .saturating_duration_since(Instant::now())
+                                    .as_millis()
+                                    .div_ceil(1000)
+                                    .max(1);
+                                status.retry_notice = Some(format!(
+                                    "Переподключаюсь · попытка {attempt}/{max_attempts} · через {seconds}с"
+                                ));
                             }
                             if let Some(pending) = question.as_ref().filter(|pending| !pending.in_chat()) {
                                 let (width, height) = renderer.size();
@@ -2314,9 +2561,13 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
                         let store = store.clone();
                         let id = session.id.clone();
                         let appended = recovered[persisted.min(recovered.len())..].to_vec();
-                        tokio::task::spawn_blocking(move || store.append_many(&id, &appended))
-                            .await
-                            .map_err(io::Error::other)??;
+                        if let Ok(Err(error)) =
+                            tokio::task::spawn_blocking(move || store.append_many(&id, &appended))
+                                .await
+                        {
+                            // An interrupted turn still ends the chat cleanly.
+                            status.toast = Some(format!("Сессия не сохранена: {error}"));
+                        }
                     }
                     messages = recovered;
                 }

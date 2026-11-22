@@ -46,8 +46,21 @@ impl Pending {
         rows
     }
 
-    fn capacity(height: usize) -> usize {
-        height.saturating_sub(6).max(1)
+    /// Rows available for the command text, and whether a paging hint is shown.
+    ///
+    /// `frame` and `answer` must agree: when they disagreed, the picker drew
+    /// fewer rows than it assumed, so `scroll` could never reach `max_scroll`
+    /// and Enter was silently dropped.
+    fn layout(height: usize, rows: usize) -> (usize, bool) {
+        // heading + blank + three choices + blank + hint
+        let reserved = 7;
+        let plain = height.saturating_sub(reserved).max(1);
+        if rows > plain {
+            // A paging hint costs one more row; only it knows the real capacity.
+            (height.saturating_sub(reserved + 1).max(1), true)
+        } else {
+            (plain, false)
+        }
     }
 
     pub fn frame(&self, width: usize, height: usize, mode: ColorMode) -> Frame {
@@ -66,7 +79,7 @@ impl Pending {
             };
         }
         let command = self.command_rows(width);
-        let capacity = Self::capacity(height);
+        let (capacity, paged) = Self::layout(height, command.len());
         let max_scroll = command.len().saturating_sub(capacity);
         let scroll = self.scroll.min(max_scroll);
         let mut lines = vec![picker::heading(
@@ -83,7 +96,7 @@ impl Pending {
                 mode,
             ));
         }
-        if max_scroll > 0 {
+        if paged {
             lines.push(picker::text(
                 &format!(
                     "  Команда: {}–{} / {} · PgUp/PgDn",
@@ -142,8 +155,9 @@ impl Pending {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        let capacity = Self::capacity(height);
-        let max_scroll = self.command_rows(width).len().saturating_sub(capacity);
+        let rows = self.command_rows(width);
+        let (capacity, _) = Self::layout(height, rows.len());
+        let max_scroll = rows.len().saturating_sub(capacity);
         if height < 7 || width < 16 {
             return match key.code {
                 KeyCode::Esc => Some(ShellApproval::Deny),
@@ -174,24 +188,27 @@ impl Pending {
                 self.scroll = self.scroll.saturating_sub(capacity);
                 None
             }
+            // Denying is always safe, even while the command is still unread.
             KeyCode::Enter if self.selected == 2 => Some(ShellApproval::Deny),
-            KeyCode::Enter if self.scroll >= max_scroll && self.selected == 0 => {
+            // Approving needs the full command on screen, but a partially scrolled
+            // view must not swallow Enter: jump to the tail and ask again instead.
+            KeyCode::Enter if self.selected == 0 => {
+                if self.scroll < max_scroll {
+                    self.scroll = max_scroll;
+                    return None;
+                }
                 Some(ShellApproval::Once)
             }
-            KeyCode::Enter if self.scroll >= max_scroll && self.selected == 1 => {
-                let label = self
-                    .request
-                    .prefix
-                    .as_ref()
-                    .map(|p| format!("2. Похожие: {p} … (до конца чата)"));
-                if label
-                    .as_deref()
-                    .is_some_and(|label| label.width() <= width.saturating_sub(3))
-                {
-                    Some(ShellApproval::Similar)
-                } else {
-                    None
+            KeyCode::Enter if self.selected == 1 => {
+                // Never gate this on the rendered label width: a long prefix used
+                // to make Enter a silent no-op. The prefix itself is what matters.
+                if self.request.prefix.is_some() {
+                    return Some(ShellApproval::Similar);
                 }
+                // Nothing to widen: fall back to the scope that always applies and
+                // let the moved marker show the key was handled.
+                self.selected = 0;
+                None
             }
             _ => None,
         }
@@ -300,12 +317,40 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_or_clipped_scope_cannot_be_selected() {
+    fn clipped_scope_label_still_accepts_enter() {
+        // A long prefix used to make the label wider than the terminal, and the
+        // picker then swallowed Enter; the label is merely clipped, so choosing
+        // the scope must still work.
         let mut p = pending("git status", Some("git status"));
         p.answer(&key(KeyCode::Up), 20, 8);
-        assert_eq!(p.answer(&key(KeyCode::Enter), 20, 8), None);
+        assert_eq!(
+            p.answer(&key(KeyCode::Enter), 20, 8),
+            Some(ShellApproval::Similar)
+        );
+    }
+
+    #[test]
+    fn missing_scope_moves_marker_instead_of_ignoring_enter() {
         let mut p = pending("pwd", None);
         p.answer(&key(KeyCode::Up), 80, 8);
+        // No prefix to widen: the marker falls back to the safe default choice.
         assert_eq!(p.answer(&key(KeyCode::Enter), 80, 8), None);
+        assert_eq!(
+            p.answer(&key(KeyCode::Enter), 80, 8),
+            Some(ShellApproval::Once)
+        );
+    }
+
+    #[test]
+    fn enter_approves_after_scrolling_without_hunting_the_exact_end() {
+        // Pressing Enter on a long command jumps to the last page and approves on
+        // the next press, so a scrolled picker can never silently drop the key.
+        let mut p = pending(&format!("printf {}", "y".repeat(400)), None);
+        p.answer(&key(KeyCode::Down), 40, 10);
+        assert_eq!(p.answer(&key(KeyCode::Enter), 40, 10), None);
+        assert_eq!(
+            p.answer(&key(KeyCode::Enter), 40, 10),
+            Some(ShellApproval::Once)
+        );
     }
 }

@@ -1,6 +1,6 @@
 # Providers
 
-The executable supports `anthropic`, `openai-chat`, and `openai-responses` protocols through HTTP/SSE. Set `provider.base_url`, `provider.protocol`, `provider.api_key_env`, and the model in [configuration](configuration.md). CLI endpoint/protocol overrides are also available; `gitcode --help` is authoritative.
+The executable supports `anthropic`, `openai-chat`, and `openai-responses` protocols through HTTP/SSE. Set `provider.base_url`, `provider.protocol`, `provider.api_key_env`, and the model in [configuration](configuration.md), or run `/provider` interactively to switch between saved profiles or add a new endpoint (base URL, API key vs. Bearer auth, and token stored privately under `~/.gitcode/credentials/`). CLI endpoint/protocol overrides are also available; `gitcode --help` is authoritative.
 
 Changing protocol does not change the credential environment variable automatically. Base URLs for OpenAI-compatible services generally include `/v1`.
 

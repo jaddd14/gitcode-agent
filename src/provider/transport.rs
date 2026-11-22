@@ -491,8 +491,10 @@ impl Client {
             if let Some(progress) = progress {
                 let _ = progress
                     .send(Event::RetryNotice {
-                        attempt: attempt.saturating_add(2),
-                        max_attempts: self.retry.retries.saturating_add(1),
+                        // One-based retry number: the first retry is "1 из 3",
+                        // not "2 из 4", and never starts at a second attempt.
+                        attempt: attempt.saturating_add(1),
+                        max_attempts: self.retry.retries.max(1),
                         delay_ms: delay.as_millis().min(u128::from(u64::MAX)) as u64,
                     })
                     .await;

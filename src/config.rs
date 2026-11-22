@@ -64,6 +64,8 @@ pub struct Config {
     pub model: String,
     /// Provider endpoint configuration.
     pub provider: Provider,
+    /// Saved provider profiles offered by `/provider`, newest last.
+    pub providers: Vec<Provider>,
     /// Allow a project to override provider credentials and interpolate environment variables.
     /// This opt-in is accepted only in the user's configuration.
     pub trust_project_config: bool,
@@ -71,8 +73,12 @@ pub struct Config {
     pub max_turns: u32,
     /// Automatic compaction threshold as a window fraction.
     pub compaction_threshold: f64,
+    /// Enable automatic compaction once the threshold is crossed; `false` keeps the full context.
+    pub auto_compact: bool,
     /// Approximate input context window in tokens for automatic compaction.
     pub context_window: u64,
+    /// Conversation rows moved per mouse-wheel notch.
+    pub mouse_scroll_speed: u32,
     /// Enable intro animation in interactive terminals.
     pub intro: bool,
     /// Persisted terminal palette and white-text preference.
@@ -91,10 +97,13 @@ impl Default for Config {
             language: "ru".into(),
             model: "claude-opus-5-5".into(),
             provider: Provider::default(),
+            providers: Vec::new(),
             trust_project_config: false,
             max_turns: 0,
             compaction_threshold: 0.9,
+            auto_compact: true,
             context_window: 200_000,
+            mouse_scroll_speed: 3,
             intro: true,
             theme: crate::theme::ThemeChoice::default(),
             shell: "auto".into(),
@@ -141,6 +150,11 @@ impl Config {
                 "must be between zero and one",
             ),
             (
+                "mouse_scroll_speed",
+                (1..=50).contains(&self.mouse_scroll_speed),
+                "must be between 1 and 50 rows",
+            ),
+            (
                 "provider.max_tokens",
                 self.provider.max_tokens >= 1024,
                 "must be at least 1024 tokens",
@@ -176,6 +190,56 @@ impl Config {
         let unique: std::collections::BTreeSet<_> = self.plugins.iter().collect();
         if unique.len() != self.plugins.len() {
             return Err(invalid(source, "plugins", "plugin names must be unique"));
+        }
+        if self.providers.len() > 32 {
+            return Err(invalid(
+                source,
+                "providers",
+                "at most 32 saved providers are allowed",
+            ));
+        }
+        for provider in &self.providers {
+            if provider.name.trim().is_empty() || provider.name.len() > 64 {
+                return Err(invalid(
+                    source,
+                    "providers.name",
+                    "must be nonempty and at most 64 bytes",
+                ));
+            }
+            if !(provider.base_url.starts_with("https://")
+                || provider.base_url.starts_with("http://"))
+            {
+                return Err(invalid(
+                    source,
+                    "providers.base_url",
+                    "must be an HTTP(S) URL",
+                ));
+            }
+            // Saved profiles hold the lookup name only, never a secret.
+            if provider.api_key_env.contains('=')
+                || provider
+                    .api_key_env
+                    .bytes()
+                    .any(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_'))
+            {
+                return Err(invalid(
+                    source,
+                    "providers.api_key_env",
+                    "must be an environment variable name",
+                ));
+            }
+        }
+        let provider_names: std::collections::BTreeSet<_> = self
+            .providers
+            .iter()
+            .map(|provider| &provider.name)
+            .collect();
+        if provider_names.len() != self.providers.len() {
+            return Err(invalid(
+                source,
+                "providers",
+                "provider names must be unique",
+            ));
         }
         if self.hooks.len() > 32 {
             return Err(invalid(source, "hooks", "at most 32 hooks are allowed"));
@@ -491,6 +555,82 @@ pub fn save_theme(home: &Path, choice: crate::theme::ThemeChoice) -> Result<()> 
     result.map_err(|error| io("save theme configuration", path, error))
 }
 
+/// Persist one provider profile and make it the active `[provider]`, keeping
+/// every unrelated user setting untouched.
+///
+/// Only the profile shape is stored; the token itself stays in the private
+/// credential store under `~/.gitcode/credentials/<api_key_env>`.
+pub fn save_provider(home: &Path, mut profile: Provider) -> Result<()> {
+    let directory = home.join(".gitcode");
+    let path = directory.join("config.toml");
+    let mut value = match std::fs::read_to_string(&path) {
+        Ok(text) => text
+            .parse::<toml::Value>()
+            .map_err(|_| invalid(&path, "root", "invalid TOML syntax"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            toml::Value::Table(Default::default())
+        }
+        Err(error) => return Err(io("read configuration", &path, error)),
+    };
+    let table = value
+        .as_table_mut()
+        .ok_or_else(|| invalid(&path, "root", "expected a table"))?;
+    // Read existing profiles before `[provider]` is replaced.
+    let mut profiles: Vec<Provider> = table
+        .get("providers")
+        .map(|value| value.clone().try_into())
+        .transpose()
+        .map_err(|_| invalid(&path, "providers", "cannot read saved providers"))?
+        .unwrap_or_default();
+    let encoded_profile = toml::Value::try_from(profile.clone())
+        .map_err(|_| invalid(&path, "provider", "cannot encode provider"))?;
+    profiles.retain(|saved| saved.name != profile.name);
+    profiles.push(std::mem::take(&mut profile));
+    let encoded_profiles = toml::Value::try_from(profiles)
+        .map_err(|_| invalid(&path, "providers", "cannot encode providers"))?;
+    table.insert("provider".into(), encoded_profile);
+    table.insert("providers".into(), encoded_profiles);
+    let text = toml::to_string_pretty(&value)
+        .map_err(|_| invalid(&path, "root", "cannot encode configuration"))?;
+    write_private(&directory, &path, &text).map_err(|error| io("save provider", &path, error))
+}
+
+/// Atomically replace a private configuration file owned by the operator.
+fn write_private(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(directory)?;
+    let temporary = directory.join(format!(
+        ".config.toml.{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| {
+        let mut file = options.open(&temporary)?;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            file.set_permissions(metadata.permissions())?;
+        }
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        #[cfg(unix)]
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Standard configuration file paths for diagnostics.
 pub fn sources(home: &Path, project: &Path) -> [PathBuf; 3] {
     [
@@ -585,9 +725,50 @@ mod tests {
         let mut c = Config::default();
         assert!(c.validate(Path::new("test")).is_ok());
         assert_eq!(c.max_turns, 0);
+        assert!(c.auto_compact);
+        assert_eq!(c.mouse_scroll_speed, 3);
+        c.mouse_scroll_speed = 0;
+        assert!(c.validate(Path::new("test")).is_err());
+        c.mouse_scroll_speed = 3;
         c.max_turns = 1;
         c.compaction_threshold = f64::NAN;
         assert!(c.validate(Path::new("test")).is_err());
+    }
+
+    #[test]
+    fn save_provider_updates_active_and_preserves_settings() {
+        let home =
+            std::env::temp_dir().join(format!("gitcode-provider-save-{}", std::process::id()));
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let config_dir = home.join(".gitcode");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "model = 'custom-model'\nauto_compact = false\nmouse_scroll_speed = 6\n",
+        )
+        .unwrap();
+        let profile = Provider {
+            name: "api.openai.com".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            protocol: Protocol::OpenaiChat,
+            api_key_env: "API_OPENAI_COM_API_KEY".into(),
+            prompt_cache: false,
+            ..Provider::default()
+        };
+        save_provider(&home, profile.clone()).unwrap();
+        let loaded = load(&home, &project, &BTreeMap::new(), &Overrides::new()).unwrap();
+        assert_eq!(loaded.model, "custom-model");
+        assert!(!loaded.auto_compact);
+        assert_eq!(loaded.mouse_scroll_speed, 6);
+        assert_eq!(loaded.provider.name, "api.openai.com");
+        assert_eq!(loaded.providers.len(), 1);
+        assert_eq!(loaded.providers[0].base_url, "https://api.openai.com/v1");
+        // Saving again replaces the same profile instead of duplicating it.
+        save_provider(&home, profile).unwrap();
+        let reloaded = load(&home, &project, &BTreeMap::new(), &Overrides::new()).unwrap();
+        assert_eq!(reloaded.providers.len(), 1);
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

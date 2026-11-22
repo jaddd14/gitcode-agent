@@ -528,6 +528,9 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
             config.compaction_threshold,
         ),
     };
+    // `auto_compact = false` keeps the full conversation until the operator runs
+    // `/compact`; the threshold then only affects the manual path.
+    agent.compaction.set_automatic(config.auto_compact);
     let checkpoint_store = store.clone();
     let checkpoint_id = session.id.clone();
     if let Ok(Ok(Some(data))) =
@@ -686,6 +689,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                 branch: &branch,
                 permission,
                 no_intro: cli.no_intro || !config.intro,
+                mouse_scroll_speed: config.mouse_scroll_speed,
                 session: Some((store, session)),
             },
         )

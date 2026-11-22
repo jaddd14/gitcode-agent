@@ -14,7 +14,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Maximum on-disk bytes per session, including an interrupted tail.
-pub const MAX_SESSION_BYTES: u64 = 16 * 1024 * 1024;
+///
+/// Long chats with large tool output used to reach the 16 MiB ceiling, and the
+/// resulting write error tore down the whole TUI; the journal now has room for
+/// a full working day of a real session.
+pub const MAX_SESSION_BYTES: u64 = 128 * 1024 * 1024;
 /// Current JSONL record schema.
 pub const SCHEMA_VERSION: u32 = 1;
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
