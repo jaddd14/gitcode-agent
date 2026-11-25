@@ -2,13 +2,14 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.4.7] - 2026-11-25
+## [0.4.8] - 2026-11-25
 
 ### Fixed
 
 - Update the `url` dependency to address RUSTSEC-2026-0592.
 - Isolate terminal guard tests that share the process-wide panic handler, preventing intermittent macOS CI failures.
 - Wait for interrupted processes to release their files during the Windows integration test cleanup.
+- Set accepted mock provider sockets to blocking mode to prevent intermittent Windows test failures.
 - Remove the left border from submitted user messages so it does not appear when selecting and copying text.
 - Avoid rebuilding a completed selection on every chat redraw and scroll, reducing work for long selections in large conversations.
 - Copy selections only after releasing the mouse button; show the copy notice in the existing status row to keep the chat stationary.

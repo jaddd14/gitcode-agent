@@ -28,6 +28,8 @@ fn provider_preset_selects_protocol_and_credential() {
                 Err(error) => panic!("provider listener failed: {error}"),
             }
         };
+        // Windows inherits nonblocking mode from the listener.
+        socket.set_nonblocking(false).unwrap();
         socket
             .set_read_timeout(Some(std::time::Duration::from_secs(10)))
             .unwrap();

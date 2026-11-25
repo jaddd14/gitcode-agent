@@ -35,6 +35,8 @@ fn failed_headless_turn_preserves_completed_tool_result() {
                     Err(error) => panic!("provider listener failed: {error}"),
                 }
             };
+            // Windows inherits nonblocking mode from the listener.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
