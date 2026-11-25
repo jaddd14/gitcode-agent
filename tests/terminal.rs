@@ -15,6 +15,10 @@ use gitcode::tui::{
 use std::io;
 use std::sync::{Arc, Mutex};
 
+// Guard unwind invokes the process-wide panic hook, which restores all active
+// guards. Keep these tests from restoring each other while they run in parallel.
+static GUARD_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[derive(Default)]
 struct Backend {
     bytes: Mutex<Vec<u8>>,
@@ -39,6 +43,7 @@ fn key(editor: &mut Editor, code: KeyCode, modifiers: KeyModifiers) -> Action {
 }
 #[test]
 fn guard_restores_every_flag_on_drop_and_unwind() {
+    let _serial = GUARD_TEST_LOCK.lock().unwrap();
     let backend = Arc::new(Backend::default());
     {
         let guard = TerminalGuard::with_backend(backend.clone(), false).unwrap();
@@ -63,6 +68,7 @@ fn guard_restores_every_flag_on_drop_and_unwind() {
 }
 #[test]
 fn guard_restoration_uses_detected_extensions() {
+    let _serial = GUARD_TEST_LOCK.lock().unwrap();
     use gitcode::tui::capabilities::Capabilities;
     for synchronized_output in [false, true] {
         let backend = Arc::new(Backend::default());
@@ -88,6 +94,7 @@ fn guard_restoration_uses_detected_extensions() {
 #[cfg(unix)]
 #[test]
 fn guard_pops_keyboard_only_after_successful_push() {
+    let _serial = GUARD_TEST_LOCK.lock().unwrap();
     use gitcode::tui::capabilities::Capabilities;
     let capabilities = Capabilities {
         kitty_keyboard: true,
