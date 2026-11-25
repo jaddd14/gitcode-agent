@@ -249,7 +249,24 @@ async fn interrupted_turn_keeps_request_completed_tools_and_marks_running_tool()
     }
     server.await.unwrap();
     agent.tools.shutdown().await.unwrap();
-    std::fs::remove_dir_all(root).unwrap();
+    // Dropping the interrupted foreground future requests cancellation; its
+    // worker may still be releasing a Windows process handle asynchronously.
+    // Wait for transient sharing violations instead of racing directory cleanup.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::remove_dir_all(&root) {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error)
+                if cfg!(windows)
+                    && matches!(error.raw_os_error(), Some(5 | 32 | 33))
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => panic!("failed to remove test workspace: {error}"),
+        }
+    }
 }
 
 #[test]
