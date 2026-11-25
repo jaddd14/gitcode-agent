@@ -184,6 +184,24 @@ fn field_frame(
     }
 }
 
+// Bracketed paste must stay a single line and respect the same byte limits as typing.
+fn paste_field(value: &mut String, text: &str, limit: usize, url: bool) {
+    let text = text
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>();
+    if url && value == "https://" && (text.starts_with("https://") || text.starts_with("http://")) {
+        value.clear();
+    }
+    for c in text.chars() {
+        if value.len() + c.len_utf8() > limit {
+            break;
+        }
+        value.push(c);
+    }
+}
+
 /// Read one line of text with a caret, returning `None` when cancelled.
 async fn read_value(
     renderer: &mut Renderer<io::Stdout>,
@@ -223,13 +241,17 @@ async fn read_value(
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
                         && !key.modifiers.contains(KeyModifiers::ALT) =>
                 {
-                    if value.len() < 512 {
+                    if value.len() + c.len_utf8() <= 512 {
                         value.push(c);
                     }
                     error = None;
                 }
                 _ => {}
             },
+            Some(Ok(Event::Paste(text))) => {
+                paste_field(&mut value, &text, 512, true);
+                error = None;
+            }
             Some(Ok(Event::Resize(w, h))) => renderer.resize(w.into(), h.into()),
             Some(Err(error)) => return Err(error),
             None => return Ok(None),
@@ -274,12 +296,13 @@ async fn read_secret(
                 KeyCode::Char(c)
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
                         && !key.modifiers.contains(KeyModifiers::ALT)
-                        && secret.len() < 8192 =>
+                        && secret.len() + c.len_utf8() <= 8192 =>
                 {
                     secret.push(c);
                 }
                 _ => {}
             },
+            Some(Ok(Event::Paste(text))) => paste_field(&mut secret, &text, 8192, false),
             Some(Ok(Event::Resize(w, h))) => renderer.resize(w.into(), h.into()),
             Some(Err(error)) => return Err(error),
             None => return Ok(None),
@@ -481,6 +504,19 @@ mod tests {
             base_url: url.into(),
             ..Provider::default()
         }
+    }
+
+    #[test]
+    fn paste_url_and_secret_are_single_line_and_bounded() {
+        let mut url = "https://".to_string();
+        paste_field(&mut url, "https://example.com/v1\n", 512, true);
+        assert_eq!(url, "https://example.com/v1");
+        let mut secret = String::new();
+        paste_field(&mut secret, "token\n\x1b[31m", 8192, false);
+        assert_eq!(secret, "token[31m");
+        let mut limited = String::new();
+        paste_field(&mut limited, "яяя", 5, false);
+        assert_eq!(limited, "яя");
     }
 
     #[test]

@@ -83,10 +83,7 @@ impl Frame {
         let activity_rows = usize::from(status.busy)
             + usize::from(status.retry_notice.is_some())
             + usize::from(status.busy && status.retry_notice.is_some())
-            + usize::from(status.copied_chars.is_some())
-            + usize::from(
-                status.busy || status.retry_notice.is_some() || status.copied_chars.is_some(),
-            );
+            + usize::from(status.busy || status.retry_notice.is_some());
         let agent_rows = status
             .subagents
             .len()
@@ -168,21 +165,6 @@ impl Frame {
                 width,
             ));
         }
-        if let Some(count) = status.copied_chars {
-            let word = match (count % 100, count % 10) {
-                (11..=14, _) => "символов",
-                (_, 1) => "символ",
-                (_, 2..=4) => "символа",
-                _ => "символов",
-            };
-            above.push(clip(
-                &format!(
-                    "  {} Скопировано · {count} {word}",
-                    if glyphs.ascii { "+" } else { "✓" }
-                ),
-                width,
-            ));
-        }
         if !above.is_empty() {
             above.push(String::new());
             if let Some((row, _)) = &mut cursor {
@@ -200,7 +182,22 @@ impl Frame {
         if !hint_line.is_empty() {
             lines.push(hint_line);
         }
-        lines.push(status.line(width));
+        let copy_notice = status.copied_chars.map(|count| {
+            let word = match (count % 100, count % 10) {
+                (11..=14, _) => "символов",
+                (_, 1) => "символ",
+                (_, 2..=4) => "символа",
+                _ => "символов",
+            };
+            clip(
+                &format!(
+                    "  {} Скопировано · {count} {word}",
+                    if glyphs.ascii { "+" } else { "✓" }
+                ),
+                width,
+            )
+        });
+        lines.push(copy_notice.unwrap_or_else(|| status.line(width)));
         lines.push(super::widgets::divider(width, glyphs));
         for run in status.subagents.iter().rev().take(agent_rows).rev() {
             let (mark, state) = match run.state {
@@ -367,6 +364,12 @@ impl<W: Write> Renderer<W> {
     pub fn clear_selection(&mut self) {
         if let Some(viewport) = &mut self.viewport {
             viewport.clear_selection();
+        }
+    }
+    /// Enable or disable mouse wheel scroll animation.
+    pub fn set_scroll_animation(&mut self, enabled: bool) {
+        if let Some(viewport) = &mut self.viewport {
+            viewport.set_scroll_animation(enabled);
         }
     }
     /// Whether the viewport has another scrolling animation frame.
@@ -1100,7 +1103,7 @@ mod clipboard_notice_tests {
     use super::*;
     use crate::tui::input::Editor;
     #[test]
-    fn copy_notice_is_above_composer_during_idle_and_generation() {
+    fn copy_notice_keeps_the_composer_and_history_in_place() {
         for busy in [false, true] {
             let status = Status {
                 busy,
@@ -1118,7 +1121,18 @@ mod clipboard_notice_tests {
                 .iter()
                 .position(|line| line.contains("Спроси, или / для команд"))
                 .unwrap();
-            assert!(notice < prompt);
+            assert!(notice > prompt);
+            let before = Frame::input(
+                &Editor::default(),
+                &Status {
+                    busy,
+                    ..Status::default()
+                },
+                80,
+                24,
+            );
+            assert_eq!(frame.lines.len(), before.lines.len());
+            assert_eq!(frame.cursor, before.cursor);
             let styled = super::super::widgets::style_frame_row(
                 &frame.lines[notice],
                 &Theme::default(),

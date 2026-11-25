@@ -5,6 +5,7 @@ compaction_threshold = 0.9
 auto_compact = true # set to false to keep the full conversation until you run /compact
 context_window = 200000
 mouse_scroll_speed = 3 # conversation rows per mouse-wheel notch (1..=50)
+scroll_animation = false # true enables animated mouse scrolling
 intro = true
 
 [provider]

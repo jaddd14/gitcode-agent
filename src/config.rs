@@ -79,6 +79,8 @@ pub struct Config {
     pub context_window: u64,
     /// Conversation rows moved per mouse-wheel notch.
     pub mouse_scroll_speed: u32,
+    /// Animate mouse wheel scrolling; disabled by default for immediate scrolling.
+    pub scroll_animation: bool,
     /// Enable intro animation in interactive terminals.
     pub intro: bool,
     /// Persisted terminal palette and white-text preference.
@@ -104,6 +106,7 @@ impl Default for Config {
             auto_compact: true,
             context_window: 200_000,
             mouse_scroll_speed: 3,
+            scroll_animation: false,
             intro: true,
             theme: crate::theme::ThemeChoice::default(),
             shell: "auto".into(),

@@ -284,6 +284,8 @@ pub struct Options<'a> {
     pub no_intro: bool,
     /// Conversation rows moved per mouse-wheel notch.
     pub mouse_scroll_speed: u32,
+    /// Animate mouse wheel scrolling.
+    pub scroll_animation: bool,
     /// Persistent project session and recovered conversation.
     pub session: Option<(
         crate::session::store::SessionStore,
@@ -528,7 +530,7 @@ fn format_user_turn(prompt: &str, width: usize, theme: &Theme, mode: ColorMode) 
         .iter()
         .enumerate()
     {
-        let prefix = if idx == 0 { "│ › " } else { "│   " };
+        let prefix = if idx == 0 { "  › " } else { "    " };
         let clipped = widgets::fit(&format!("{prefix}{line}"), width);
         if mode == ColorMode::None {
             rows.push(clipped);
@@ -556,11 +558,11 @@ fn user_turn_wraps_long_and_multiline_messages() {
     assert_eq!(
         rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>(),
         [
-            "│ › abcdefg",
-            "│   hijklmn",
-            "│   op",
-            "│   вторая ",
-            "│   строка",
+            "  › abcdefg",
+            "    hijklmn",
+            "    op",
+            "    вторая ",
+            "    строка",
             ""
         ]
         .iter()
@@ -1258,6 +1260,7 @@ pub async fn run(agent: &mut Agent, options: Options<'_>) -> io::Result<()> {
     };
     renderer.enable_viewport()?;
     renderer.set_scroll_step(options.mouse_scroll_speed as usize);
+    renderer.set_scroll_animation(options.scroll_animation);
     draw_header(&mut renderer, &header, &status, mode)?;
     let mut persistence = options.session;
     let mut messages = persistence

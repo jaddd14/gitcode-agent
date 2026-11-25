@@ -690,6 +690,7 @@ async fn run(cli: Cli, logger: &mut Logger) -> Result<(), String> {
                 permission,
                 no_intro: cli.no_intro || !config.intro,
                 mouse_scroll_speed: config.mouse_scroll_speed,
+                scroll_animation: config.scroll_animation,
                 session: Some((store, session)),
             },
         )

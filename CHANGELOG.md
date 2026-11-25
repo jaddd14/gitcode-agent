@@ -2,6 +2,19 @@
 
 All notable changes are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-11-25
+
+### Fixed
+
+- Remove the left border from submitted user messages so it does not appear when selecting and copying text.
+- Avoid rebuilding a completed selection on every chat redraw and scroll, reducing work for long selections in large conversations.
+- Copy selections only after releasing the mouse button; show the copy notice in the existing status row to keep the chat stationary.
+- Accept bracketed paste in both the provider base URL and token fields, including complete URLs pasted over the default scheme.
+
+### Added
+
+- `scroll_animation` configuration option (default `false`). Immediate scrolling remains the default; set it to `true` for animated mouse-wheel scrolling.
+
 ## [0.4.4] - 2026-11-17
 
 ### Added

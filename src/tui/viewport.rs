@@ -17,6 +17,7 @@ pub(super) struct Viewport {
     target_offset: usize,
     // Rows moved per mouse-wheel notch, mirroring Codex's `tui.mouse_scroll_speed`.
     scroll_step: usize,
+    scroll_animation: bool,
     previous_count: usize,
     screen: Vec<String>,
     drawn: Vec<String>,
@@ -51,6 +52,9 @@ impl Viewport {
     /// Rows moved per mouse-wheel notch; clamped so a notch always moves the view.
     pub fn set_scroll_step(&mut self, step: usize) {
         self.scroll_step = step.clamp(1, 50);
+    }
+    pub fn set_scroll_animation(&mut self, enabled: bool) {
+        self.scroll_animation = enabled;
     }
     fn step(&self) -> usize {
         if self.scroll_step == 0 {
@@ -93,7 +97,11 @@ impl Viewport {
         }
     }
     pub fn clear(&mut self) {
+        let step = self.scroll_step;
+        let animation = self.scroll_animation;
         *self = Self::default();
+        self.scroll_step = step;
+        self.scroll_animation = animation;
     }
     pub fn clear_selection(&mut self) {
         self.selection = None;
@@ -174,9 +182,9 @@ impl Viewport {
             MouseEventKind::ScrollUp => {
                 let step = self.step();
                 self.target_offset = self.target_offset.saturating_add(step);
-                // Codex paints the wheel immediately; a per-frame animation made
-                // the view trail the pointer and feel like it was fighting back.
-                self.offset = self.target_offset;
+                if !self.scroll_animation {
+                    self.offset = self.target_offset;
+                }
                 if self
                     .selection
                     .as_ref()
@@ -188,7 +196,9 @@ impl Viewport {
             MouseEventKind::ScrollDown => {
                 let step = self.step();
                 self.target_offset = self.target_offset.saturating_sub(step);
-                self.offset = self.target_offset;
+                if !self.scroll_animation {
+                    self.offset = self.target_offset;
+                }
                 if self
                     .selection
                     .as_ref()
@@ -270,8 +280,13 @@ impl Viewport {
                 | MouseEventKind::ScrollUp
                 | MouseEventKind::ScrollDown
         ) {
-            let width = self.view_width;
-            self.resolve_selection(width);
+            let is_wheel = matches!(
+                event.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            );
+            if !is_wheel {
+                self.resolve_selection(self.view_width);
+            }
         }
     }
     pub fn scroll_pending(&self) -> bool {
@@ -281,7 +296,11 @@ impl Viewport {
         let Some(s) = &mut self.selection else {
             return Ok(None);
         };
-        if s.copied || s.start == s.end || s.changed.elapsed() < Duration::from_secs(1) {
+        if s.dragging
+            || s.copied
+            || s.start == s.end
+            || s.changed.elapsed() < Duration::from_secs(1)
+        {
             return Ok(None);
         }
         if !s.text.is_empty() {
@@ -311,9 +330,15 @@ impl Viewport {
         let max_offset = count.saturating_sub(chat_height);
         self.target_offset = self.target_offset.min(max_offset);
         self.offset = self.offset.min(max_offset);
-        // The view follows the requested offset exactly; Codex has no per-frame
-        // catch-up animation, so scrolling never drifts behind the input.
-        self.offset = self.target_offset;
+        if self.scroll_animation {
+            if self.offset < self.target_offset {
+                self.offset += 1;
+            } else if self.offset > self.target_offset {
+                self.offset -= 1;
+            }
+        } else {
+            self.offset = self.target_offset;
+        }
         if let Some(s) = &self.selection {
             if s.dragging && !s.composer {
                 // A held drag that reaches an edge scrolls, so the copy keeps
@@ -362,7 +387,14 @@ impl Viewport {
         if shift != 0 {
             self.follow_scroll(shift);
         }
-        if self.selection.is_some() {
+        // Only a held drag moves with the view. Reconstructing an old selection
+        // on every frame makes scrolling proportional to the entire selection.
+        if shift != 0
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.dragging && !s.composer)
+        {
             self.resolve_selection(width);
         }
         if let Some(s) = &self.selection {
@@ -566,6 +598,55 @@ mod tests {
     }
 
     #[test]
+    fn animated_scrolling_is_optional_and_settings_survive_clear() {
+        let mut v = Viewport::default();
+        v.set_scroll_step(6);
+        v.set_scroll_animation(true);
+        v.clear();
+        v.append(&(0..20).map(|n| format!("line {n}")).collect::<Vec<_>>());
+        v.set_frame(
+            &Frame {
+                lines: vec!["prompt".into()],
+                cursor: None,
+            },
+            0,
+        );
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        v.mouse(mouse(MouseEventKind::ScrollUp, 2, 0));
+        assert!(v.scroll_pending());
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        assert_eq!(v.offset, 1);
+        while v.scroll_pending() {
+            v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        }
+        assert_eq!(v.offset, 6);
+        v.set_scroll_animation(false);
+        v.mouse(mouse(MouseEventKind::ScrollDown, 2, 0));
+        assert_eq!(v.offset, 0);
+        assert!(!v.scroll_pending());
+    }
+
+    #[test]
+    fn completed_selection_is_not_rebuilt_on_every_frame_or_scroll() {
+        let mut v = Viewport::default();
+        v.append(&(0..1000).map(|n| format!("line {n}")).collect::<Vec<_>>());
+        v.set_frame(
+            &Frame {
+                lines: vec!["prompt".into()],
+                cursor: None,
+            },
+            0,
+        );
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        v.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0, 0));
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, 3));
+        v.selection.as_mut().unwrap().text = "cached".into();
+        v.mouse(mouse(MouseEventKind::ScrollUp, 2, 0));
+        v.draw(&mut Vec::new(), (30, 5)).unwrap();
+        assert_eq!(v.selection.as_ref().unwrap().text, "cached");
+    }
+
+    #[test]
     fn composer_selection_copies_only_prompt_text() {
         let mut v = Viewport::default();
         v.set_frame(
@@ -640,6 +721,7 @@ mod tests {
         assert!(!after.contains("line 17"), "{after:?}");
         assert!(after.contains("line 14"), "{after:?}");
 
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, 0));
         let mut bytes = Vec::new();
         v.selection.as_mut().unwrap().changed -= Duration::from_secs(1);
         assert!(v.copy_if_due(&mut bytes).unwrap().is_some());
@@ -692,6 +774,10 @@ mod tests {
         let mut bytes = Vec::new();
         assert_eq!(v.copy_if_due(&mut bytes).unwrap(), None);
         assert!(bytes.is_empty());
+        v.selection.as_mut().unwrap().changed -= Duration::from_secs(2);
+        assert_eq!(v.copy_if_due(&mut bytes).unwrap(), None);
+        v.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 1, 2));
+        assert_eq!(v.copy_if_due(&mut bytes).unwrap(), None);
         v.selection.as_mut().unwrap().changed -= Duration::from_secs(1);
         assert_eq!(
             v.copy_if_due(&mut bytes).unwrap(),
